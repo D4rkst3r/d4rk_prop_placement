@@ -1,0 +1,89 @@
+name: D4rk Dev-Server
+version: "1.0.0"
+author: D4rkst3r
+description: FiveM Server mit qbx_core, ox_lib, ox_inventory, ox_target und prop_placement.
+
+tasks:
+  - action: connect_database
+
+  - action: download_github
+    src: https://github.com/citizenfx/cfx-server-data
+    subpath: resources
+    dest: ./resources/[cfx-default]
+
+  - action: waste_time
+    seconds: 5
+
+  - action: download_file
+    url: https://github.com/overextended/oxmysql/releases/latest/download/oxmysql.zip
+    path: ./tmp/oxmysql.zip
+
+  - action: unzip
+    src: ./tmp/oxmysql.zip
+    dest: ./resources/[standalone]
+
+  - action: waste_time
+    seconds: 5
+
+  - action: download_github
+    src: https://github.com/overextended/ox_lib
+    dest: ./resources/[ox]/ox_lib
+
+  - action: waste_time
+    seconds: 5
+
+  - action: download_github
+    src: https://github.com/overextended/ox_inventory
+    dest: ./resources/[ox]/ox_inventory
+
+  - action: waste_time
+    seconds: 5
+
+  - action: download_github
+    src: https://github.com/overextended/ox_target
+    dest: ./resources/[ox]/ox_target
+
+  - action: waste_time
+    seconds: 5
+
+  - action: download_github
+    src: https://github.com/Qbox-project/qbx_core
+    dest: ./resources/[qbx]/qbx_core
+
+  - action: waste_time
+    seconds: 5
+
+  - action: download_github
+    src: https://github.com/D4rkst3r/prop_placement
+    dest: ./tmp/prop_placement
+
+  - action: move_path
+    src: ./tmp/prop_placement/server.cfg
+    dest: ./server.cfg
+
+  - action: move_path
+    src: ./tmp/prop_placement
+    dest: ./resources/[standalone]/prop_placement
+
+  - action: waste_time
+    seconds: 5
+
+  - action: replace_string
+    file: ./server.cfg
+    search: "{{serverEndpoints}}"
+    replace: "{{serverEndpoints}}"
+
+  - action: query_database
+    query: "CREATE TABLE IF NOT EXISTS `players` (`citizenid` VARCHAR(50) NOT NULL, `license` VARCHAR(50) DEFAULT NULL, `name` VARCHAR(255) DEFAULT NULL, `money` LONGTEXT, `charinfo` LONGTEXT, `job` LONGTEXT, `gang` LONGTEXT, `position` LONGTEXT, `metadata` LONGTEXT, `inventory` LONGTEXT, PRIMARY KEY (`citizenid`), INDEX `license` (`license`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"
+
+  - action: query_database
+    query: "CREATE TABLE IF NOT EXISTS `ox_inventory` (`id` INT UNSIGNED NOT NULL AUTO_INCREMENT, `owner` VARCHAR(60) DEFAULT NULL, `name` VARCHAR(60) NOT NULL, `label` VARCHAR(60) DEFAULT NULL, `data` MEDIUMTEXT NOT NULL, `slots` SMALLINT UNSIGNED NOT NULL, `weight` INT UNSIGNED NOT NULL, `open` TINYINT(1) NOT NULL DEFAULT 0, PRIMARY KEY (`id`), INDEX `owner` (`owner`), INDEX `name` (`name`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"
+
+  - action: query_database
+    query: "CREATE TABLE IF NOT EXISTS `prop_placement_props` (`id` INT(11) NOT NULL AUTO_INCREMENT, `item_name` VARCHAR(64) NOT NULL, `model` VARCHAR(128) NOT NULL, `x` FLOAT NOT NULL, `y` FLOAT NOT NULL, `z` FLOAT NOT NULL, `rotation` FLOAT NOT NULL DEFAULT 0.0, `owner_identifier` VARCHAR(128) DEFAULT NULL, `owner_job` VARCHAR(64) DEFAULT NULL, `persistent` TINYINT(1) NOT NULL DEFAULT 1, `placed_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (`id`), INDEX `idx_owner` (`owner_identifier`), INDEX `idx_persistent` (`persistent`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"
+
+  - action: query_database
+    query: "CREATE TABLE IF NOT EXISTS `prop_placement_logs` (`id` INT(11) NOT NULL AUTO_INCREMENT, `action` ENUM('place','remove','admin_give','admin_clear') NOT NULL, `server_id` INT(11) DEFAULT NULL, `identifier` VARCHAR(128) DEFAULT NULL, `player_name` VARCHAR(128) DEFAULT NULL, `prop_id` INT(11) DEFAULT NULL, `item_name` VARCHAR(64) DEFAULT NULL, `model` VARCHAR(128) DEFAULT NULL, `coords` JSON DEFAULT NULL, `extra` JSON DEFAULT NULL, `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (`id`), INDEX `idx_action` (`action`), INDEX `idx_identifier` (`identifier`), INDEX `idx_item` (`item_name`), INDEX `idx_created_at` (`created_at`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"
+
+  - action: remove_path
+    path: ./tmp
