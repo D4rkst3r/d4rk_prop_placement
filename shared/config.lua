@@ -36,4 +36,4 @@ Config.TargetDistance = 2.0
 -- ─── Inventar-Keybind ─────────────────────────────────
 -- true  = TAB öffnet ox_inventory (nur zum Testen)
 -- false = ausschalten wenn der Server ein eigenes Inventar-System hat
-Config.UseBuiltinInventoryKey = false
+Config.UseBuiltinInventoryKey = true
