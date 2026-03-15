@@ -7,7 +7,7 @@
 
 -- Server-seitige Prop-Tabelle: [propId (int)] = propData (table)
 local placedProps = {}
-local nextId      = 1  -- Wird beim Start aus DB geladen
+local nextId      = 1 -- Wird beim Start aus DB geladen
 
 -- ─────────────────────────────────────────────────────────
 -- Hilfsfunktionen
@@ -32,17 +32,12 @@ local function GetIdentifier(source)
     return 'player:' .. source
 end
 
---- Prüft ob Spieler eine Admin-Gruppe hat (Ace Permissions)
+--- Prüft ob Spieler Admin-Rechte hat (via Ace Permissions)
 --- @param source number
 --- @return bool
 local function IsAdmin(source)
-    if source == 0 then return true end  -- Konsole
-    for _, group in ipairs(Config.AdminGroups) do
-        if IsPlayerAceAllowed(source, 'group.' .. group) then
-            return true
-        end
-    end
-    return false
+    if source == 0 then return true end -- Konsole
+    return IsPlayerAceAllowed(source, 'prop_placement.admin')
 end
 
 --- Job-Abfrage via qbx_core
@@ -170,7 +165,8 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
 
     -- Admin-Only Prüfung
     if propConfig.adminOnly and not IsAdmin(src) then
-        lib.notify(src, { title = 'Keine Berechtigung', description = 'Diesen Prop können nur Admins platzieren.', type = 'error' })
+        lib.notify(src,
+            { title = 'Keine Berechtigung', description = 'Diesen Prop können nur Admins platzieren.', type = 'error' })
         return
     end
 
@@ -207,7 +203,7 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
                 description = ('Du hast bereits %d/%d Props platziert.'):format(
                     CountPlayerProps(identifier), Config.MaxPropsPerPlayer
                 ),
-                type = 'warning',
+                type        = 'warning',
             })
             return
         end
@@ -226,11 +222,11 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
 
     -- ── Prop erstellen ────────────────────────────────────
 
-    local propId  = nextId
-    nextId        = nextId + 1
-    local jobName = GetPlayerJobName(src)
+    local propId        = nextId
+    nextId              = nextId + 1
+    local jobName       = GetPlayerJobName(src)
 
-    local propData = {
+    local propData      = {
         id              = propId,
         itemName        = itemName,
         model           = propConfig.model,
@@ -292,11 +288,11 @@ RegisterNetEvent('prop_placement:remove', function(propId)
         return
     end
 
-    local identifier  = GetIdentifier(src)
-    local isOwner     = prop.ownerIdentifier == identifier
-    local admin       = IsAdmin(src)
-    local propConfig  = Config.Props[prop.itemName]
-    local ownerOnly   = propConfig and propConfig.ownerOnly or true
+    local identifier = GetIdentifier(src)
+    local isOwner    = prop.ownerIdentifier == identifier
+    local admin      = IsAdmin(src)
+    local propConfig = Config.Props[prop.itemName]
+    local ownerOnly  = propConfig and propConfig.ownerOnly or true
 
     -- Job-Check: gleicher Job darf entfernen wenn ownerOnly = false
     if not admin and not isOwner and ownerOnly then
@@ -321,7 +317,8 @@ RegisterNetEvent('prop_placement:remove', function(propId)
             end
         end
         if not allowed then
-            lib.notify(src, { title = 'Keine Berechtigung', description = 'Du kannst diesen Prop nicht entfernen.', type = 'error' })
+            lib.notify(src,
+                { title = 'Keine Berechtigung', description = 'Du kannst diesen Prop nicht entfernen.', type = 'error' })
             return
         end
     end
@@ -490,8 +487,11 @@ RegisterCommand('giveprop', function(src, args)
 
     if not Config.Props[itemName] then
         local msg = 'Unbekanntes Item: ' .. itemName
-        if src == 0 then print('[prop_placement] ' .. msg)
-        else lib.notify(src, { title = 'Fehler', description = msg, type = 'error' }) end
+        if src == 0 then
+            print('[prop_placement] ' .. msg)
+        else
+            lib.notify(src, { title = 'Fehler', description = msg, type = 'error' })
+        end
         return
     end
 
@@ -518,7 +518,7 @@ RegisterCommand('giveprop', function(src, args)
     else
         print(('[prop_placement] %dx %s → Spieler %d gegeben.'):format(amount, label, target))
     end
-end, false)  -- false = auch ohne Ace erlaubt, Prüfung passiert im Code
+end, false) -- false = auch ohne Ace erlaubt, Prüfung passiert im Code
 
 RegisterCommand('prop_list', function(src)
     if src ~= 0 and not IsAdmin(src) then return end

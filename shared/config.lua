@@ -23,7 +23,7 @@
 Config = {}
 
 -- ─── Debug ────────────────────────────────────────────
-Config.Debug = false
+Config.Debug = true
 
 -- ─── Limits ───────────────────────────────────────────
 -- Wie viele Props darf ein Spieler gleichzeitig platziert haben? (0 = unbegrenzt)
@@ -31,13 +31,13 @@ Config.MaxPropsPerPlayer = 15
 
 -- ─── Placement-Einstellungen ──────────────────────────
 Config.Placement = {
-    MaxDistance   = 5.0,    -- Maximale Platzierungsdistanz vom Spieler (Meter)
-    Alpha         = 160,    -- Ghost-Transparenz 0-255 (höher = sichtbarer)
-    ZStep         = 0.05,   -- Höhenänderung pro Mausrad-Tick (Meter)
-    ZMin          = -2.0,   -- Minimale manuelle Z-Absenkung
-    ZMax          = 5.0,    -- Maximale manuelle Z-Anhebung
-    RotationStep  = 15.0,   -- Grad pro Rotations-Tastendruck
-    GroundSnap    = true,   -- Prop auf Boden ausrichten
+    MaxDistance  = 5.0,  -- Maximale Platzierungsdistanz vom Spieler (Meter)
+    Alpha        = 160,  -- Ghost-Transparenz 0-255 (höher = sichtbarer)
+    ZStep        = 0.05, -- Höhenänderung pro Mausrad-Tick (Meter)
+    ZMin         = -2.0, -- Minimale manuelle Z-Absenkung
+    ZMax         = 5.0,  -- Maximale manuelle Z-Anhebung
+    RotationStep = 15.0, -- Grad pro Rotations-Tastendruck
+    GroundSnap   = true, -- Prop auf Boden ausrichten
 }
 
 -- ─── Admin-Gruppen ────────────────────────────────────
@@ -71,7 +71,7 @@ Config.Props = {
         jobs       = nil,
         adminOnly  = false,
         ownerOnly  = true,
-        persistent = false,
+        persistent = true,
     },
     ['garden_chair'] = {
         label      = 'Gartenstuhl',
@@ -96,8 +96,8 @@ Config.Props = {
         model      = 'prop_roadcone01a',
         jobs       = { 'police', 'ambulance', 'mechanic' },
         adminOnly  = false,
-        ownerOnly  = false,   -- jeder berechtigte Job kann entfernen
-        persistent = false,
+        ownerOnly  = false, -- jeder berechtigte Job kann entfernen
+        persistent = true,
     },
     ['police_barrier'] = {
         label      = 'Polizeiabsperrung',
@@ -105,7 +105,7 @@ Config.Props = {
         jobs       = { 'police' },
         adminOnly  = false,
         ownerOnly  = false,
-        persistent = false,
+        persistent = true,
     },
     ['road_barrier'] = {
         label      = 'Straßensperre',
@@ -113,7 +113,7 @@ Config.Props = {
         jobs       = { 'police', 'mechanic' },
         adminOnly  = false,
         ownerOnly  = false,
-        persistent = false,
+        persistent = true,
     },
     ['spike_strip'] = {
         label      = 'Nagelstreifen',
@@ -121,7 +121,7 @@ Config.Props = {
         jobs       = { 'police' },
         adminOnly  = false,
         ownerOnly  = false,
-        persistent = false,
+        persistent = true,
     },
 
     -- ── Baustelle / Mechaniker ──────────────────────────
@@ -131,7 +131,7 @@ Config.Props = {
         jobs       = { 'mechanic', 'construction' },
         adminOnly  = false,
         ownerOnly  = true,
-        persistent = false,
+        persistent = true,
     },
     ['generator'] = {
         label      = 'Generator',
@@ -139,7 +139,7 @@ Config.Props = {
         jobs       = { 'mechanic', 'construction' },
         adminOnly  = false,
         ownerOnly  = true,
-        persistent = false,
+        persistent = true,
     },
     ['scaffolding'] = {
         label      = 'Baugerüst',
@@ -170,9 +170,9 @@ Config.Props = {
 }
 
 -- ─── ox_target Optionen ───────────────────────────────
-Config.TargetDistance = 2.0   -- Interaktionsdistanz an platzierten Props
+Config.TargetDistance = 2.0 -- Interaktionsdistanz an platzierten Props
 
 -- ─── Inventar-Keybind ─────────────────────────────────
 -- true  = eigener TAB-Keybind zum Öffnen (nur zum Testen / falls kein anderes System)
 -- false = deaktivieren wenn der Server ein eigenes Inventar-System hat
-Config.UseBuiltinInventoryKey = true
+Config.UseBuiltinInventoryKey = false
