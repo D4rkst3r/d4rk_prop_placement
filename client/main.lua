@@ -141,11 +141,10 @@ end
 RegisterNetEvent('prop_placement:syncAll', function(propList)
     ClearAllLocalProps()
 
-    -- Alte übrig gebliebene Objekte aus vorherigem Start entfernen
     CreateThread(function()
+        -- Alte übrig gebliebene Objekte aus vorherigem Start entfernen
         for _, propData in ipairs(propList) do
-            local model = GetHashKey(propData.model)
-            -- Objekt an dieser Position suchen und löschen falls vorhanden
+            local model    = GetHashKey(propData.model)
             local existing = GetClosestObjectOfType(
                 propData.x, propData.y, propData.z,
                 1.0, model, false, false, false
@@ -156,7 +155,7 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
             end
         end
 
-        -- Dann neu spawnen
+        -- Neu spawnen
         for _, propData in ipairs(propList) do
             SpawnProp(propData)
             Wait(30)
@@ -197,12 +196,11 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
     for _, entry in ipairs(sortedItems) do
         local itemName = entry.itemName
         local cfg      = entry.cfg
-        local jobStr   = cfg.jobs and table.concat(cfg.jobs, ', ') or 'Alle'
         local flags    = (cfg.adminOnly and '🔒 ' or '') .. (cfg.persistent and '💾 ' or '')
 
         table.insert(options, {
             title       = flags .. cfg.label,
-            description = ('Model: %s\nJobs: %s'):format(cfg.model, jobStr),
+            description = ('Model: %s | Gewicht: %sg'):format(cfg.model, cfg.weight or 1000),
             onSelect    = function()
                 local input = lib.inputDialog('Prop-Item geben', {
                     { type = 'number', label = 'Server-ID des Spielers', required = true, min = 1 },

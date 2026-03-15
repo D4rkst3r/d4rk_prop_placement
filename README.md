@@ -13,7 +13,6 @@ Standalone Prop-Platzierungssystem fuer FiveM mit
 | Farbiger Marker         | Gruen = gueltig, Rot = ungueltig                     |
 | Rotation                | Q / R Tasten                                         |
 | Hoehenverstellung       | Mausrad                                              |
-| Job-Binding             | Props auf bestimmte Jobs beschraenkbar               |
 | Admin-System            | Ace Permissions                                      |
 | Persistenz              | Waehlbar pro Prop (DB oder nur Session)              |
 | Auto Item-Registrierung | Items werden automatisch in ox_inventory registriert |
@@ -52,7 +51,6 @@ Oeffne `shared/props.lua` und trage ein:
     label      = 'Mein Prop',
     model      = 'prop_box_wood01a',
     weight     = 1000,
-    jobs       = nil,          -- nil = alle | {'police'} = Job-beschraenkt
     adminOnly  = false,
     ownerOnly  = true,
     persistent = true,
@@ -134,10 +132,9 @@ prop_placement/
 
 ## Abhaengigkeiten
 
-| Ressource    | Pflicht            |
-| ------------ | ------------------ |
-| ox_lib       | ja                 |
-| ox_inventory | ja                 |
-| ox_target    | ja                 |
-| oxmysql      | ja                 |
-| qbx_core     | ja (Job-Erkennung) |
+| Ressource    | Pflicht |
+| ------------ | ------- |
+| ox_lib       | ja      |
+| ox_inventory | ja      |
+| ox_target    | ja      |
+| oxmysql      | ja      |

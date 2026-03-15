@@ -6,8 +6,8 @@
 Config = {}
 
 -- ─── Debug ────────────────────────────────────────────
--- true = Konsolen-Logs aktivieren
-Config.Debug = true
+-- true = Konsolen-Logs aktivieren (nur für Entwicklung!)
+Config.Debug = false
 
 -- ─── Limits ───────────────────────────────────────────
 -- Wie viele Props darf ein Spieler gleichzeitig haben? (0 = unbegrenzt)
@@ -23,12 +23,6 @@ Config.Placement = {
     RotationStep = 15.0, -- Grad pro Tastendruck (Q/R)
     GroundSnap   = true, -- Prop auf Boden einrasten
 }
-
--- ─── Admin-Gruppen ────────────────────────────────────
--- Spieler mit dem Ace 'prop_placement.admin' gelten als Admin.
--- In server.cfg zuweisen:
---   add_ace group.admin prop_placement.admin allow
-Config.AdminGroups = { 'admin', 'superadmin', 'god' }
 
 -- ─── ox_target ────────────────────────────────────────
 Config.TargetDistance = 2.0
