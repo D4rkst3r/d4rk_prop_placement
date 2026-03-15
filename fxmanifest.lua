@@ -37,5 +37,4 @@ dependencies {
     'ox_inventory',
     'ox_target',
     'oxmysql',
-    'qbx_core',
 }

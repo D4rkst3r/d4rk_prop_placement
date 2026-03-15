@@ -33,13 +33,8 @@ local function IsAdmin(source)
     return IsPlayerAceAllowed(source, 'prop_placement.admin')
 end
 
+-- qbx_core entfernt – Job-Checks deaktiviert
 local function GetPlayerJobName(source)
-    local ok, player = pcall(function()
-        return exports.qbx_core:GetPlayer(source)
-    end)
-    if ok and player then
-        return player.PlayerData.job and player.PlayerData.job.name or nil
-    end
     return nil
 end
 
@@ -158,26 +153,6 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
         return
     end
 
-    if propConfig.jobs and not IsAdmin(src) then
-        local jobName = GetPlayerJobName(src)
-        local hasJob  = false
-        if jobName then
-            for _, allowedJob in ipairs(propConfig.jobs) do
-                if allowedJob == jobName then
-                    hasJob = true; break
-                end
-            end
-        end
-        if not hasJob then
-            lib.notify(src, {
-                title       = 'Falscher Job',
-                description = 'Benötigter Job: ' .. table.concat(propConfig.jobs, ', '),
-                type        = 'error',
-            })
-            return
-        end
-    end
-
     local identifier = GetIdentifier(src)
     if Config.MaxPropsPerPlayer > 0 and not IsAdmin(src) then
         if CountPlayerProps(identifier) >= Config.MaxPropsPerPlayer then
@@ -201,7 +176,6 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
 
     local propId        = nextId
     nextId              = nextId + 1
-    local jobName       = GetPlayerJobName(src)
 
     local propData      = {
         id              = propId,
@@ -212,7 +186,7 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
         z               = posData.z,
         rotation        = posData.rotation or 0.0,
         ownerIdentifier = identifier,
-        ownerJob        = jobName,
+        ownerJob        = nil,
         persistent      = propConfig.persistent,
     }
 
@@ -225,7 +199,7 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]],
             { propId, itemName, propConfig.model,
                 posData.x, posData.y, posData.z, posData.rotation or 0.0,
-                identifier, jobName, 1 }
+                identifier, nil, 1 }
         )
     end
 
@@ -240,7 +214,7 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
     LogPropAction('place', src, identifier, GetPlayerName(src) or 'Unbekannt',
         propId, itemName, propConfig.model,
         { x = posData.x, y = posData.y, z = posData.z, rotation = posData.rotation },
-        { job = jobName }
+        {}
     )
 
     DebugLog(('Prop #%d (%s) von Spieler %d platziert.'):format(propId, itemName, src))
@@ -273,21 +247,9 @@ RegisterNetEvent('prop_placement:remove', function(propId)
     end
 
     if not admin and not isOwner and not ownerOnly then
-        local playerJob = GetPlayerJobName(src)
-        local allowed   = false
-        if prop.ownerJob and playerJob and prop.ownerJob == playerJob then
-            allowed = true
-        end
-        if propConfig and propConfig.jobs then
-            for _, j in ipairs(propConfig.jobs) do
-                if j == playerJob then allowed = true end
-            end
-        end
-        if not allowed then
-            lib.notify(src,
-                { title = 'Keine Berechtigung', description = 'Du kannst diesen Prop nicht entfernen.', type = 'error' })
-            return
-        end
+        lib.notify(src,
+            { title = 'Keine Berechtigung', description = 'Du kannst diesen Prop nicht entfernen.', type = 'error' })
+        return
     end
 
     exports.ox_inventory:AddItem(src, prop.itemName, 1)

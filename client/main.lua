@@ -67,7 +67,7 @@ local function RegisterPropTarget(propId, entity, propData)
 end
 
 -- ─────────────────────────────────────────────────────────
--- Prop spawnen / entfernen
+-- Prop spawnen
 -- ─────────────────────────────────────────────────────────
 
 local function SpawnProp(propData)
@@ -83,6 +83,7 @@ local function SpawnProp(propData)
 
     local entity = CreateObject(model, propData.x, propData.y, propData.z, false, false, false)
 
+    SetEntityAsMissionEntity(entity, true, true)
     SetEntityRotation(entity, 0.0, 0.0, propData.rotation, 2, true)
     FreezeEntityPosition(entity, true)
     SetEntityCollision(entity, true, true)
@@ -96,21 +97,38 @@ local function SpawnProp(propData)
     DebugLog('Prop #' .. propId .. ' gespawnt (' .. propData.model .. ')')
 end
 
+-- ─────────────────────────────────────────────────────────
+-- Prop entfernen
+-- ─────────────────────────────────────────────────────────
+
 local function DespawnProp(propId)
     local entity = placedProps[propId]
+    placedProps[propId] = nil
+
     if entity and DoesEntityExist(entity) then
         exports.ox_target:removeLocalEntity(entity)
-        DeleteObject(entity)
+        SetEntityInvincible(entity, false)
+        SetEntityCanBeDamaged(entity, true)
+        FreezeEntityPosition(entity, false)
+        SetEntityAsMissionEntity(entity, true, true)
+        DeleteEntity(entity)
         DebugLog('Prop #' .. propId .. ' entfernt.')
     end
-    placedProps[propId] = nil
 end
+
+-- ─────────────────────────────────────────────────────────
+-- Alle Props löschen
+-- ─────────────────────────────────────────────────────────
 
 local function ClearAllLocalProps()
     for id, entity in pairs(placedProps) do
         if DoesEntityExist(entity) then
             exports.ox_target:removeLocalEntity(entity)
-            DeleteObject(entity)
+            SetEntityInvincible(entity, false)
+            SetEntityCanBeDamaged(entity, true)
+            FreezeEntityPosition(entity, false)
+            SetEntityAsMissionEntity(entity, true, true)
+            DeleteEntity(entity)
         end
     end
     placedProps = {}
@@ -122,13 +140,30 @@ end
 
 RegisterNetEvent('prop_placement:syncAll', function(propList)
     ClearAllLocalProps()
-    DebugLog(('Sync: %d Props empfangen'):format(#propList))
+
+    -- Alte übrig gebliebene Objekte aus vorherigem Start entfernen
     CreateThread(function()
+        for _, propData in ipairs(propList) do
+            local model = GetHashKey(propData.model)
+            -- Objekt an dieser Position suchen und löschen falls vorhanden
+            local existing = GetClosestObjectOfType(
+                propData.x, propData.y, propData.z,
+                1.0, model, false, false, false
+            )
+            if DoesEntityExist(existing) then
+                SetEntityAsMissionEntity(existing, true, true)
+                DeleteEntity(existing)
+            end
+        end
+
+        -- Dann neu spawnen
         for _, propData in ipairs(propList) do
             SpawnProp(propData)
             Wait(30)
         end
     end)
+
+    DebugLog(('Sync: %d Props empfangen'):format(#propList))
 end)
 
 RegisterNetEvent('prop_placement:propPlaced', function(propData)
