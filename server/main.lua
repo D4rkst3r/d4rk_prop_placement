@@ -146,19 +146,27 @@ end)
 CreateThread(function()
     Wait(500)
 
-    for itemName, _ in pairs(Config.Props) do
-        local name = itemName -- Closure-Variable sichern
-
-        exports.ox_inventory:registerUsableItem(name, function(source)
-            local src = source
-            if not src or src == 0 then return end
-
-            DebugLog(('Item-Use: %s von Spieler %d'):format(name, src))
-            TriggerClientEvent('prop_placement:startPlacing', src, name)
-        end)
+    -- Alle Prop-Item-Namen in einen Filter packen
+    local itemFilter = {}
+    for itemName in pairs(Config.Props) do
+        itemFilter[itemName] = true
     end
 
-    DebugLog('Usable Items registriert für alle Props.')
+    exports.ox_inventory:registerHook('useItem', function(payload)
+        local src      = payload.source
+        local itemName = payload.item and payload.item.name
+
+        if not src or src == 0 then return end
+        if not itemName or not Config.Props[itemName] then return end
+
+        DebugLog(('Item-Use: %s von Spieler %d'):format(itemName, src))
+        TriggerClientEvent('prop_placement:startPlacing', src, itemName)
+
+        -- false = Item NICHT verbrauchen (RemoveItem passiert erst bei Platzierung)
+        return false
+    end, { itemFilter = itemFilter })
+
+    DebugLog('useItem Hook registriert für alle Props.')
 end)
 
 -- ─────────────────────────────────────────────────────────
