@@ -114,13 +114,19 @@ end)
 CreateThread(function()
     Wait(500)
 
+    local resourceName = GetCurrentResourceName()
     local items = {}
     for itemName, cfg in pairs(Config.Props) do
+        -- Icon-Pfad: resources/[standalone]/prop_placement/web/images/<itemName>.png
+        -- Lege einfach eine PNG mit dem Item-Namen in diesen Ordner
+        local iconPath = ('nui://%s/web/images/%s.png'):format(resourceName, itemName)
+
         items[itemName] = {
             label  = cfg.label,
             weight = cfg.weight or 1000,
             stack  = true,
             close  = true,
+            image  = iconPath,
         }
     end
 
