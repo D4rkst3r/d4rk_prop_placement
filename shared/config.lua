@@ -23,7 +23,7 @@
 Config = {}
 
 -- ─── Debug ────────────────────────────────────────────
-Config.Debug = true
+Config.Debug = true -- Debug-Ausgaben in Konsole aktivieren (true/false)
 
 -- ─── Limits ───────────────────────────────────────────
 -- Wie viele Props darf ein Spieler gleichzeitig platziert haben? (0 = unbegrenzt)
@@ -52,6 +52,7 @@ Config.Props = {
     ['wooden_crate'] = {
         label      = 'Holzkiste',
         model      = 'prop_box_wood01a',
+        weight     = 2000,
         jobs       = nil,
         adminOnly  = false,
         ownerOnly  = true,
@@ -60,6 +61,7 @@ Config.Props = {
     ['metal_crate'] = {
         label      = 'Metallkiste',
         model      = 'prop_box_ammo02a',
+        weight     = 3000,
         jobs       = nil,
         adminOnly  = false,
         ownerOnly  = true,
@@ -68,14 +70,16 @@ Config.Props = {
     ['plastic_bin'] = {
         label      = 'Mülleimer',
         model      = 'prop_bin_03a',
+        weight     = 800,
         jobs       = nil,
         adminOnly  = false,
         ownerOnly  = true,
-        persistent = true,
+        persistent = false,
     },
     ['garden_chair'] = {
         label      = 'Gartenstuhl',
         model      = 'prop_chair_03',
+        weight     = 1500,
         jobs       = nil,
         adminOnly  = false,
         ownerOnly  = true,
@@ -84,6 +88,7 @@ Config.Props = {
     ['folding_table'] = {
         label      = 'Klapptisch',
         model      = 'prop_table_01a',
+        weight     = 2500,
         jobs       = nil,
         adminOnly  = false,
         ownerOnly  = true,
@@ -94,56 +99,63 @@ Config.Props = {
     ['traffic_cone'] = {
         label      = 'Verkehrskegel',
         model      = 'prop_roadcone01a',
+        weight     = 500,
         jobs       = { 'police', 'ambulance', 'mechanic' },
         adminOnly  = false,
         ownerOnly  = false, -- jeder berechtigte Job kann entfernen
-        persistent = true,
+        persistent = false,
     },
     ['police_barrier'] = {
         label      = 'Polizeiabsperrung',
         model      = 'prop_mp_barrier_01b',
+        weight     = 3000,
         jobs       = { 'police' },
         adminOnly  = false,
         ownerOnly  = false,
-        persistent = true,
+        persistent = false,
     },
     ['road_barrier'] = {
         label      = 'Straßensperre',
         model      = 'prop_mp_barrier_02b',
+        weight     = 5000,
         jobs       = { 'police', 'mechanic' },
         adminOnly  = false,
         ownerOnly  = false,
-        persistent = true,
+        persistent = false,
     },
     ['spike_strip'] = {
         label      = 'Nagelstreifen',
         model      = 'prop_ld_stinger_s',
+        weight     = 1000,
         jobs       = { 'police' },
         adminOnly  = false,
         ownerOnly  = false,
-        persistent = true,
+        persistent = false,
     },
 
     -- ── Baustelle / Mechaniker ──────────────────────────
     ['worklight'] = {
         label      = 'Baustellenlampe',
         model      = 'prop_worklight_03a',
+        weight     = 2000,
         jobs       = { 'mechanic', 'construction' },
         adminOnly  = false,
         ownerOnly  = true,
-        persistent = true,
+        persistent = false,
     },
     ['generator'] = {
         label      = 'Generator',
         model      = 'prop_generator_01a',
+        weight     = 8000,
         jobs       = { 'mechanic', 'construction' },
         adminOnly  = false,
         ownerOnly  = true,
-        persistent = true,
+        persistent = false,
     },
     ['scaffolding'] = {
         label      = 'Baugerüst',
         model      = 'prop_scaffolding_01',
+        weight     = 10000,
         jobs       = { 'construction' },
         adminOnly  = false,
         ownerOnly  = true,
@@ -154,6 +166,7 @@ Config.Props = {
     ['admin_barrier_large'] = {
         label      = 'Große Absperrung (Admin)',
         model      = 'prop_barrier_work05',
+        weight     = 1,
         jobs       = nil,
         adminOnly  = true,
         ownerOnly  = false,
@@ -162,6 +175,7 @@ Config.Props = {
     ['admin_tent'] = {
         label      = 'Zelt (Admin)',
         model      = 'prop_fbi_tent01',
+        weight     = 1,
         jobs       = nil,
         adminOnly  = true,
         ownerOnly  = false,

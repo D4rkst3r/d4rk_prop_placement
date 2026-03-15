@@ -107,6 +107,28 @@ CreateThread(function()
 end)
 
 -- ─────────────────────────────────────────────────────────
+-- ox_inventory - Items automatisch registrieren
+-- Kein manuelles Eintragen in items.lua noetig!
+-- ---------------------------------------------------------
+
+CreateThread(function()
+    Wait(500)
+
+    local items = {}
+    for itemName, cfg in pairs(Config.Props) do
+        items[itemName] = {
+            label  = cfg.label,
+            weight = cfg.weight or 1000,
+            stack  = true,
+            close  = true,
+        }
+    end
+
+    exports.ox_inventory:registerItems(items)
+    print(("[prop_placement] ox_inventory: Items automatisch registriert."))
+end)
+
+-- ---------------------------------------------------------
 -- ox_inventory – Item-Use Hooks (einer pro Prop-Typ)
 -- ─────────────────────────────────────────────────────────
 
