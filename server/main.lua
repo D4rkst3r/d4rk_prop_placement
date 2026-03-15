@@ -7,6 +7,7 @@
 
 local placedProps = {}
 local nextId      = 1
+local cooldowns   = {}  -- [identifier] = last placement timestamp
 
 -- ─────────────────────────────────────────────────────────
 -- Hilfsfunktionen
@@ -33,7 +34,6 @@ local function IsAdmin(source)
     return IsPlayerAceAllowed(source, 'prop_placement.admin')
 end
 
--- qbx_core entfernt – Job-Checks deaktiviert
 local function GetPlayerJobName(source)
     return nil
 end
@@ -56,6 +56,37 @@ local function GetPropList()
     return list
 end
 
+--- Prüft ob Spieler einen Cooldown hat
+--- @param identifier string
+--- @return bool
+local function IsOnCooldown(identifier)
+    if Config.PlacementCooldown <= 0 then return false end
+    local last = cooldowns[identifier]
+    if not last then return false end
+    return (os.clock() * 1000 - last) < Config.PlacementCooldown
+end
+
+--- Setzt Cooldown für einen Spieler
+--- @param identifier string
+local function SetCooldown(identifier)
+    cooldowns[identifier] = os.clock() * 1000
+end
+
+--- Entfernt alle Props eines Spielers
+--- @param identifier string
+local function RemovePlayerProps(identifier)
+    local removed = 0
+    for id, prop in pairs(placedProps) do
+        if prop.ownerIdentifier == identifier then
+            placedProps[id] = nil
+            MySQL.query('DELETE FROM prop_placement_props WHERE id = ?', { id })
+            TriggerClientEvent('prop_placement:propRemoved', -1, id)
+            removed = removed + 1
+        end
+    end
+    return removed
+end
+
 -- ─────────────────────────────────────────────────────────
 -- Props beim Start aus DB laden
 -- ─────────────────────────────────────────────────────────
@@ -76,7 +107,7 @@ CreateThread(function()
                 z               = row.z,
                 rotation        = row.rotation,
                 ownerIdentifier = row.owner_identifier,
-                ownerJob        = row.owner_job,
+                ownerJob        = nil,
                 persistent      = true,
             }
             if id >= nextId then nextId = id + 1 end
@@ -125,6 +156,25 @@ AddEventHandler('ox_inventory:usedItem', function(playerId, name, slotId, metada
 end)
 
 -- ─────────────────────────────────────────────────────────
+-- Spieler Disconnect → Props entfernen (optional)
+-- ─────────────────────────────────────────────────────────
+
+AddEventHandler('playerDropped', function(reason)
+    local src             = source
+    local identifier      = GetIdentifier(src)
+
+    -- Cooldown aufräumen
+    cooldowns[identifier] = nil
+
+    if Config.RemoveOnDisconnect then
+        local removed = RemovePlayerProps(identifier)
+        if removed > 0 then
+            DebugLog(('Spieler %s getrennt – %d Props entfernt.'):format(identifier, removed))
+        end
+    end
+end)
+
+-- ─────────────────────────────────────────────────────────
 -- NET EVENT: Sync
 -- ─────────────────────────────────────────────────────────
 
@@ -141,6 +191,9 @@ end)
 RegisterNetEvent('prop_placement:place', function(itemName, posData)
     local src        = source
     local propConfig = Config.Props[itemName]
+    local identifier = GetIdentifier(src)
+
+    -- ── Validierung ──────────────────────────────────────
 
     if not propConfig then
         lib.notify(src, { title = 'Fehler', description = 'Ungültiger Prop-Typ.', type = 'error' })
@@ -153,7 +206,17 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
         return
     end
 
-    local identifier = GetIdentifier(src)
+    -- Cooldown prüfen
+    if not IsAdmin(src) and IsOnCooldown(identifier) then
+        lib.notify(src, {
+            title       = 'Zu schnell!',
+            description = 'Bitte warte einen Moment vor der nächsten Platzierung.',
+            type        = 'warning',
+        })
+        return
+    end
+
+    -- Prop-Limit prüfen
     if Config.MaxPropsPerPlayer > 0 and not IsAdmin(src) then
         if CountPlayerProps(identifier) >= Config.MaxPropsPerPlayer then
             lib.notify(src, {
@@ -166,6 +229,32 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
         end
     end
 
+    -- Server-seitige Positions-Validierung
+    if not IsAdmin(src) then
+        local playerPed    = GetPlayerPed(src)
+        local playerCoords = GetEntityCoords(playerPed)
+        local propCoords   = vector3(posData.x, posData.y, posData.z)
+        local distance     = #(playerCoords - propCoords)
+
+        -- Maximale Distanz prüfen (etwas großzügiger als Client-seitig wegen Latenz)
+        if distance > Config.Placement.MaxDistance * 1.5 then
+            lib.notify(src, {
+                title       = 'Ungültige Position',
+                description = 'Der Prop ist zu weit entfernt.',
+                type        = 'error',
+            })
+            DebugLog(('Spieler %d: Prop zu weit weg (%.1fm)'):format(src, distance))
+            return
+        end
+
+        -- Z-Validierung: Prop nicht zu weit unter der Erde
+        if posData.z < -200.0 then
+            lib.notify(src, { title = 'Ungültige Position', description = 'Ungültige Z-Koordinate.', type = 'error' })
+            return
+        end
+    end
+
+    -- Item aus Inventar nehmen
     local success = exports.ox_inventory:RemoveItem(src, itemName, 1)
     if not success then
         lib.notify(src,
@@ -173,6 +262,11 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
             'error' })
         return
     end
+
+    -- Cooldown setzen
+    SetCooldown(identifier)
+
+    -- ── Prop erstellen ────────────────────────────────────
 
     local propId        = nextId
     nextId              = nextId + 1
@@ -336,6 +430,55 @@ RegisterNetEvent('prop_placement:adminClearAll', function()
     )
 
     print(('[prop_placement] Admin %d löschte alle %d Props.'):format(src, count))
+end)
+
+-- ─────────────────────────────────────────────────────────
+-- NET EVENT: Admin – Props eines Spielers löschen
+-- ─────────────────────────────────────────────────────────
+
+RegisterNetEvent('prop_placement:adminClearPlayer', function(targetIdentifier)
+    local src = source
+    if not IsAdmin(src) then
+        lib.notify(src, { title = 'Keine Berechtigung', type = 'error' })
+        return
+    end
+
+    local removed = RemovePlayerProps(targetIdentifier)
+
+    lib.notify(src, {
+        title       = 'Props gelöscht',
+        description = removed .. ' Props von ' .. targetIdentifier .. ' entfernt.',
+        type        = 'success',
+    })
+
+    DebugLog(('Admin %d löschte %d Props von %s'):format(src, removed, targetIdentifier))
+end)
+
+-- ─────────────────────────────────────────────────────────
+-- NET EVENT: Admin – Prop-Liste anfordern
+-- ─────────────────────────────────────────────────────────
+
+RegisterNetEvent('prop_placement:requestPropList', function(filterIdentifier)
+    local src = source
+    if not IsAdmin(src) then return end
+
+    local list = {}
+    for id, prop in pairs(placedProps) do
+        if not filterIdentifier or prop.ownerIdentifier == filterIdentifier then
+            table.insert(list, {
+                id              = id,
+                itemName        = prop.itemName,
+                model           = prop.model,
+                x               = prop.x,
+                y               = prop.y,
+                z               = prop.z,
+                ownerIdentifier = prop.ownerIdentifier or 'Unbekannt',
+                persistent      = prop.persistent,
+            })
+        end
+    end
+
+    TriggerClientEvent('prop_placement:receivePropList', src, list)
 end)
 
 -- ─────────────────────────────────────────────────────────

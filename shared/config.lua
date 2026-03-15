@@ -24,6 +24,31 @@ Config.Placement = {
     GroundSnap   = true, -- Prop auf Boden einrasten
 }
 
+-- ─── Cooldown ─────────────────────────────────────────
+-- Mindestzeit in ms zwischen zwei Platzierungen (0 = deaktiviert)
+Config.PlacementCooldown = 1000
+
+-- ─── Disconnect ───────────────────────────────────────
+-- true  = Props eines Spielers werden beim Disconnect entfernt
+-- false = Props bleiben bestehen
+Config.RemoveOnDisconnect = false
+
+-- ─── Streaming ────────────────────────────────────────
+-- Props werden nur in der Nähe des Spielers gespawnt
+Config.Streaming = {
+    Enabled       = true,
+    SpawnRadius   = 150.0, -- Props innerhalb dieser Distanz spawnen
+    DespawnRadius = 180.0, -- Props außerhalb dieser Distanz despawnen
+    CheckInterval = 2000,  -- Wie oft prüfen (ms)
+}
+
+-- ─── Snap-to-Grid ─────────────────────────────────────
+-- Props rasten auf einem Raster ein beim Platzieren
+Config.SnapToGrid = {
+    Enabled  = false,
+    GridSize = 0.5, -- Rasterabstand in Metern
+}
+
 -- ─── ox_target ────────────────────────────────────────
 Config.TargetDistance = 2.0
 

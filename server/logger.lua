@@ -30,10 +30,6 @@ Config.Logging = {
     -- Generiere einen zufälligen Key z.B.: https://generate-random.org/api-key-generator
     ApiKey    = 'Z9ijq5p2rfk6BNVa6Vcv0OPqvMN5mkH3',
 
-    -- Port auf dem die HTTP API läuft (FiveM nutzt den Ressource-HTTP-Handler)
-    -- Erreichbar über: http://SERVER_IP:30120/prop_placement/...
-    -- (30120 ist der Standard-FiveM-Port – kein separater Port nötig!)
-
     -- Wie viele Log-Einträge pro API-Seite
     PageSize  = 50,
 
@@ -50,9 +46,24 @@ local function JsonResponse(res, status, data)
     res.send(json.encode(data))
 end
 
-local function CheckApiKey(req)
+--- Query-String manuell parsen da FiveM req.query nicht immer befüllt
+--- @param fullPath string  z.B. "/prop_placement/logs?api_key=abc&page=2"
+--- @return string, table   Pfad ohne Query, Query-Parameter als Tabelle
+local function ParseRequest(fullPath)
+    local path     = fullPath:match('^([^%?]+)') or fullPath
+    local query    = {}
+    local queryStr = fullPath:match('%?(.+)$')
+    if queryStr then
+        for key, value in queryStr:gmatch('([^&=]+)=([^&]*)') do
+            query[key] = value
+        end
+    end
+    return path, query
+end
+
+local function CheckApiKey(req, query)
     local key = (req.headers and req.headers['x-api-key'])
-        or (req.query and req.query['api_key'])
+        or query['api_key']
     return key == Config.Logging.ApiKey
 end
 
@@ -138,19 +149,21 @@ SetHttpHandler(function(req, res)
         return
     end
 
+    -- Pfad und Query manuell parsen
+    local path, query = ParseRequest(req.path or '/')
+    print('[PP-API DEBUG] req.path = ' .. tostring(req.path))
+    print('[PP-API DEBUG] parsed path = ' .. tostring(path))
+
     -- API-Key prüfen
-    if not CheckApiKey(req) then
-        JsonResponse(res, 401, { error = 'Unauthorized – invalid or missing API key' })
+    if not CheckApiKey(req, query) then
+        JsonResponse(res, 401, { error = 'Unauthorized - invalid or missing API key' })
         return
     end
-
-    local path  = req.path or '/'
-    local query = req.query or {}
 
     -- ──────────────────────────────────────────────────────
     -- GET /prop_placement/health
     -- ──────────────────────────────────────────────────────
-    if path == '/prop_placement/health' then
+    if path == '/prop_placement/health' or path == '/health' then
         JsonResponse(res, 200, {
             status    = 'ok',
             resource  = GetCurrentResourceName(),
@@ -163,7 +176,7 @@ SetHttpHandler(function(req, res)
     -- ──────────────────────────────────────────────────────
     -- GET /prop_placement/stats
     -- ──────────────────────────────────────────────────────
-    if path == '/prop_placement/stats' then
+    if path == '/prop_placement/stats' or path == '/stats' then
         local total      = MySQL.query.await('SELECT COUNT(*) as c FROM prop_placement_logs')
         local byAction   = MySQL.query.await('SELECT action, COUNT(*) as count FROM prop_placement_logs GROUP BY action')
         local topItems   = MySQL.query.await([[
@@ -197,7 +210,7 @@ SetHttpHandler(function(req, res)
     -- ──────────────────────────────────────────────────────
     -- GET /prop_placement/logs
     -- ──────────────────────────────────────────────────────
-    if path == '/prop_placement/logs' then
+    if path == '/prop_placement/logs' or path == '/logs' then
         local page       = math.max(1, tonumber(query.page) or 1)
         local pageSize   = Config.Logging.PageSize
         local offset     = (page - 1) * pageSize
@@ -290,7 +303,7 @@ SetHttpHandler(function(req, res)
 
     -- 404 für unbekannte Pfade
     JsonResponse(res, 404, {
-        error = 'Not Found',
+        error     = 'Not Found',
         available = {
             '/prop_placement/health',
             '/prop_placement/logs',
