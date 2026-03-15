@@ -24,7 +24,7 @@ local placementValid  = false
 local KEY_CONFIRM     = 38  -- E
 local KEY_CANCEL      = 177 -- Backspace / Delete
 local KEY_ROT_LEFT    = 44  -- Q
-local KEY_ROT_RIGHT   = 45  -- R (Reload – wird während Platzierung deaktiviert)
+local KEY_ROT_RIGHT   = 45  -- R
 local KEY_SCROLL_UP   = 15  -- Mausrad hoch
 local KEY_SCROLL_DOWN = 14  -- Mausrad runter
 
@@ -32,7 +32,6 @@ local KEY_SCROLL_DOWN = 14  -- Mausrad runter
 -- Hilfsfunktionen
 -- ─────────────────────────────────────────────────────────
 
---- Kamerarotation in Richtungsvektor umrechnen
 local function RotToDirection(rot)
     local rad = math.pi / 180.0
     return vector3(
@@ -42,14 +41,11 @@ local function RotToDirection(rot)
     )
 end
 
---- Raycast von der Kamera aus ermitteln
---- @return hitPos vec3, hitGround bool
 local function GetRaycastHit()
     local camCoords                    = GetGameplayCamCoord()
     local dir                          = RotToDirection(GetGameplayCamRot(2))
     local dest                         = camCoords + dir * Config.Placement.MaxDistance
 
-    -- Spieler-Ped UND Ghost-Entity ignorieren
     local playerPed                    = PlayerPedId()
     local ignoreEnt                    = previewEntity or playerPed
 
@@ -62,11 +58,7 @@ local function GetRaycastHit()
     return vector3(dest.x, dest.y, dest.z + zOffset), false
 end
 
---- Prüft ob die Position gültig ist
---- @param pos vec3
---- @return bool
 local function IsValidPosition(pos)
-    -- Bodenhöhe prüfen
     local groundZ, found = GetGroundZFor_3dCoord(pos.x, pos.y, pos.z + 5.0, false)
     if found and pos.z < groundZ - 5.0 then
         return false
@@ -74,7 +66,6 @@ local function IsValidPosition(pos)
     return true
 end
 
---- Ghost-Entität und State sauber aufräumen
 local function CleanupPreview()
     lib.hideTextUI()
     if previewEntity and DoesEntityExist(previewEntity) then
@@ -92,16 +83,12 @@ end
 -- Haupt-Platzierungsfunktion
 -- ─────────────────────────────────────────────────────────
 
---- Startet den Platzierungs-Modus
---- @param itemName string   ox_inventory Item-Name
---- @param propConfig table  Config.Props[itemName]
 function StartPropPlacement(itemName, propConfig)
     if isPlacing then
         lib.notify({ title = 'Hinweis', description = 'Du platzierst bereits etwas!', type = 'warning' })
         return
     end
 
-    -- Modell laden
     local model = GetHashKey(propConfig.model)
     RequestModel(model)
 
@@ -120,7 +107,6 @@ function StartPropPlacement(itemName, propConfig)
     currentRotation = 0.0
     zOffset         = 0.0
 
-    -- Ghost-Entität erstellen
     local pos       = GetEntityCoords(PlayerPedId())
     previewEntity   = CreateObject(model, pos.x, pos.y, pos.z, false, false, false)
 
@@ -130,72 +116,44 @@ function StartPropPlacement(itemName, propConfig)
     FreezeEntityPosition(previewEntity, true)
     SetEntityCanBeDamaged(previewEntity, false)
     SetEntityHasGravity(previewEntity, false)
-    NetworkSetEntityInvisibleToNetwork(previewEntity, true) -- nur lokal sichtbar
+    NetworkSetEntityInvisibleToNetwork(previewEntity, true)
 
     SetModelAsNoLongerNeeded(model)
 
-    print('[PP-DEBUG PLACEMENT] StartPropPlacement gestartet für: ' .. itemName)
-    print('[PP-DEBUG PLACEMENT] Model: ' .. propConfig.model)
-    print('[PP-DEBUG PLACEMENT] MaxDistance: ' .. tostring(Config.Placement.MaxDistance))
-
-    -- Platzierungs-Thread
     CreateThread(function()
-        local lastRotateTime = 0 -- Debounce für Rotation
-        local debugThrottle  = 0 -- Debug nur alle 60 Frames loggen
+        local lastRotateTime = 0
 
         while isPlacing do
-            -- Störende Controls während Platzierung deaktivieren
-            DisableControlAction(0, KEY_ROT_LEFT, true)  -- Q (Cover)
-            DisableControlAction(0, KEY_ROT_RIGHT, true) -- R (Reload)
-            DisableControlAction(0, 25, true)            -- Zielen (damit Scroll nicht ADS aktiviert)
+            DisableControlAction(0, KEY_ROT_LEFT, true)
+            DisableControlAction(0, KEY_ROT_RIGHT, true)
+            DisableControlAction(0, 25, true)
 
-            -- Raycast-Position ermitteln
             local hitPos, hitGround = GetRaycastHit()
             placementValid = hitGround and IsValidPosition(hitPos)
 
-            -- ── TEMP DEBUG (alle 60 Frames) ──────────────────
-            debugThrottle = debugThrottle + 1
-            if debugThrottle >= 60 then
-                debugThrottle = 0
-                local groundZ, groundFound = GetGroundZFor_3dCoord(hitPos.x, hitPos.y, hitPos.z + 5.0, false)
-                print(('[PP-DEBUG PLACEMENT] hit=%s | pos=%.1f,%.1f,%.1f | groundZ=%.1f | groundFound=%s | valid=%s')
-                    :format(
-                        tostring(hitGround),
-                        hitPos.x, hitPos.y, hitPos.z,
-                        groundZ or -999,
-                        tostring(groundFound),
-                        tostring(placementValid)
-                    ))
-            end
-            -- ── TEMP DEBUG ENDE ──────────────────────────────
-
-            -- Ghost-Entität positionieren
             SetEntityCoordsNoOffset(previewEntity, hitPos.x, hitPos.y, hitPos.z, false, false, false)
             SetEntityRotation(previewEntity, 0.0, 0.0, currentRotation, 2, true)
 
-            -- Boden-Marker (grün = gültig, rot = ungültig)
+            -- Marker: grün = gültig, rot = ungültig
             local r, g, b = placementValid and 0 or 220, placementValid and 200 or 0, 0
-            DrawMarker(
-                1,                            -- Typ: senkrechter Zylinder
-                hitPos.x, hitPos.y, hitPos.z, -- Position
-                0.0, 0.0, 0.0,                -- Richtung
-                0.0, 0.0, 0.0,                -- Rotation
-                0.6, 0.6, 0.08,               -- Größe
-                r, g, b, 140,                 -- Farbe + Alpha
+            DrawMarker(1,
+                hitPos.x, hitPos.y, hitPos.z,
+                0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0,
+                0.6, 0.6, 0.08,
+                r, g, b, 140,
                 false, false, 2, nil, nil, false
             )
 
-            -- Hilfemenü
             lib.showTextUI(
                 ('**[E]** Platzieren  •  **[Backspace]** Abbrechen\n**[Q]** ↺ Drehen  •  **[R]** ↻ Drehen  •  **[Scroll]** Höhe: **%.2fm**')
                 :format(zOffset),
                 { position = 'bottom-center', icon = 'fas fa-cube' }
             )
 
-            -- ── Platzieren (E) ─────────────────────────────────
+            -- Platzieren (E)
             if IsDisabledControlJustPressed(0, KEY_CONFIRM) or IsControlJustPressed(0, KEY_CONFIRM) then
                 if placementValid then
-                    print('[PP-DEBUG PLACEMENT] Platzieren bestätigt! Sende an Server...')
                     TriggerServerEvent('prop_placement:place', itemName, {
                         x        = hitPos.x,
                         y        = hitPos.y,
@@ -205,14 +163,6 @@ function StartPropPlacement(itemName, propConfig)
                     CleanupPreview()
                     return
                 else
-                    -- Extra Debug beim E-Druck auf ungültige Position
-                    local groundZ, groundFound = GetGroundZFor_3dCoord(hitPos.x, hitPos.y, hitPos.z + 5.0, false)
-                    print(('[PP-DEBUG PLACEMENT] E gedrückt aber UNGÜLTIG! hit=%s groundZ=%.1f groundFound=%s inWater=%s')
-                        :format(
-                            tostring(hitGround),
-                            groundZ or -999,
-                            tostring(groundFound)
-                        ))
                     lib.notify({
                         title       = 'Ungültige Position',
                         description = 'Hier kann kein Prop platziert werden.',
@@ -222,14 +172,14 @@ function StartPropPlacement(itemName, propConfig)
                 end
             end
 
-            -- ── Abbrechen (Backspace) ──────────────────────────
+            -- Abbrechen (Backspace)
             if IsControlJustPressed(0, KEY_CANCEL) then
                 lib.notify({ title = 'Abgebrochen', description = 'Platzierung abgebrochen.', type = 'inform', duration = 2000 })
                 CleanupPreview()
                 return
             end
 
-            -- ── Links drehen (Q) ──────────────────────────────
+            -- Links drehen (Q)
             if IsDisabledControlPressed(0, KEY_ROT_LEFT) then
                 local now = GetGameTimer()
                 if (now - lastRotateTime) >= 80 then
@@ -238,7 +188,7 @@ function StartPropPlacement(itemName, propConfig)
                 end
             end
 
-            -- ── Rechts drehen (R) ─────────────────────────────
+            -- Rechts drehen (R)
             if IsDisabledControlPressed(0, KEY_ROT_RIGHT) then
                 local now = GetGameTimer()
                 if (now - lastRotateTime) >= 80 then
@@ -247,12 +197,12 @@ function StartPropPlacement(itemName, propConfig)
                 end
             end
 
-            -- ── Höhe hoch (Scroll Up) ─────────────────────────
+            -- Höhe hoch
             if IsDisabledControlJustPressed(0, KEY_SCROLL_UP) or IsControlJustPressed(0, KEY_SCROLL_UP) then
                 zOffset = math.min(Config.Placement.ZMax, zOffset + Config.Placement.ZStep)
             end
 
-            -- ── Höhe runter (Scroll Down) ─────────────────────
+            -- Höhe runter
             if IsDisabledControlJustPressed(0, KEY_SCROLL_DOWN) or IsControlJustPressed(0, KEY_SCROLL_DOWN) then
                 zOffset = math.max(Config.Placement.ZMin, zOffset - Config.Placement.ZStep)
             end
@@ -264,7 +214,6 @@ function StartPropPlacement(itemName, propConfig)
     end)
 end
 
---- Platzierung von außen abbrechen (z.B. bei Tod)
 function CancelPlacementExternal()
     if isPlacing then
         isPlacing = false
@@ -272,7 +221,6 @@ function CancelPlacementExternal()
     end
 end
 
---- Gibt zurück ob gerade platziert wird
 function IsCurrentlyPlacing()
     return isPlacing
 end

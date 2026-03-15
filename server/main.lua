@@ -5,9 +5,8 @@
     ╚══════════════════════════════════════════════════════╝
 ]]
 
--- Server-seitige Prop-Tabelle: [propId (int)] = propData (table)
 local placedProps = {}
-local nextId      = 1 -- Wird beim Start aus DB geladen
+local nextId      = 1
 
 -- ─────────────────────────────────────────────────────────
 -- Hilfsfunktionen
@@ -19,9 +18,6 @@ local function DebugLog(msg)
     end
 end
 
---- Ermittelt den License-Identifier eines Spielers
---- @param source number
---- @return string
 local function GetIdentifier(source)
     for i = 0, GetNumPlayerIdentifiers(source) - 1 do
         local id = GetPlayerIdentifier(source, i)
@@ -32,17 +28,11 @@ local function GetIdentifier(source)
     return 'player:' .. source
 end
 
---- Prüft ob Spieler Admin-Rechte hat (via Ace Permissions)
---- @param source number
---- @return bool
 local function IsAdmin(source)
-    if source == 0 then return true end -- Konsole
+    if source == 0 then return true end
     return IsPlayerAceAllowed(source, 'prop_placement.admin')
 end
 
---- Job-Abfrage via qbx_core
---- @param source number
---- @return string|nil  Job-Name oder nil
 local function GetPlayerJobName(source)
     local ok, player = pcall(function()
         return exports.qbx_core:GetPlayer(source)
@@ -53,9 +43,6 @@ local function GetPlayerJobName(source)
     return nil
 end
 
---- Wie viele Props hat ein Spieler gerade platziert?
---- @param identifier string
---- @return number
 local function CountPlayerProps(identifier)
     local count = 0
     for _, prop in pairs(placedProps) do
@@ -66,8 +53,6 @@ local function CountPlayerProps(identifier)
     return count
 end
 
---- Props als flaches Array für Client-Sync liefern
---- @return table
 local function GetPropList()
     local list = {}
     for _, prop in pairs(placedProps) do
@@ -77,14 +62,13 @@ local function GetPropList()
 end
 
 -- ─────────────────────────────────────────────────────────
--- Persistente Props beim Start aus Datenbank laden
+-- Props beim Start aus DB laden
 -- ─────────────────────────────────────────────────────────
 
 CreateThread(function()
     local result = MySQL.query.await(
         'SELECT * FROM prop_placement_props WHERE persistent = 1 ORDER BY id ASC'
     )
-
     if result then
         for _, row in ipairs(result) do
             local id = row.id
@@ -107,46 +91,37 @@ CreateThread(function()
 end)
 
 -- ─────────────────────────────────────────────────────────
--- ox_inventory – Items per Export registrieren (falls unterstuetzt)
--- Fallback: Items muessen in ox_inventory/data/items.lua stehen
--- ---------------------------------------------------------
+-- Items in ox_inventory registrieren
+-- ─────────────────────────────────────────────────────────
 
 CreateThread(function()
     Wait(500)
-
-    -- Pruefen ob ox_inventory registerItems unterstuetzt
-    local ok, err = pcall(function()
+    local ok = pcall(function()
         local resourceName = GetCurrentResourceName()
         local items = {}
         for itemName, cfg in pairs(Config.Props) do
-            local iconPath = ('nui://%s/web/images/%s.png'):format(resourceName, itemName)
             items[itemName] = {
                 label  = cfg.label,
                 weight = cfg.weight or 1000,
                 stack  = true,
                 close  = true,
-                image  = iconPath,
+                image  = ('nui://%s/web/images/%s.png'):format(resourceName, itemName),
             }
         end
         exports.ox_inventory:Items(items)
     end)
-
     if ok then
         print('[prop_placement] ox_inventory: Items automatisch registriert.')
     else
-        print('[prop_placement] HINWEIS: Items konnten nicht automatisch registriert werden.')
-        print('[prop_placement] Bitte die Items aus shared/props.lua manuell in ox_inventory/data/items.lua eintragen.')
+        print('[prop_placement] HINWEIS: Items manuell in ox_inventory/data/items.lua eintragen.')
     end
 end)
 
--- ---------------------------------------------------------
--- ox_inventory – Item-Use Hooks (einer pro Prop-Typ)
+-- ─────────────────────────────────────────────────────────
+-- Item benutzen → Platzierung starten
 -- ─────────────────────────────────────────────────────────
 
--- Items-Registrierung anpassen (consume = 0 hinzufügen):
 AddEventHandler('ox_inventory:usedItem', function(playerId, name, slotId, metadata)
-    print(('[PP-DEBUG] ox_inventory:usedItem → Spieler: %d | Item: %s'):format(playerId, tostring(name)))
-
     if not Config.Props[name] then return end
     if not playerId or playerId == 0 then return end
 
@@ -155,13 +130,13 @@ AddEventHandler('ox_inventory:usedItem', function(playerId, name, slotId, metada
 end)
 
 -- ─────────────────────────────────────────────────────────
--- NET EVENT: Sync anfordern (beim Client-Spawn)
+-- NET EVENT: Sync
 -- ─────────────────────────────────────────────────────────
 
 RegisterNetEvent('prop_placement:requestSync', function()
     local src = source
     TriggerClientEvent('prop_placement:syncAll', src, GetPropList())
-    DebugLog(('Sync an Spieler %d gesendet (%d Props)'):format(src, #GetPropList()))
+    DebugLog(('Sync an Spieler %d (%d Props)'):format(src, #GetPropList()))
 end)
 
 -- ─────────────────────────────────────────────────────────
@@ -172,34 +147,27 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
     local src        = source
     local propConfig = Config.Props[itemName]
 
-    -- ── Validierung ──────────────────────────────────────
-
     if not propConfig then
         lib.notify(src, { title = 'Fehler', description = 'Ungültiger Prop-Typ.', type = 'error' })
         return
     end
 
-    -- Admin-Only Prüfung
     if propConfig.adminOnly and not IsAdmin(src) then
         lib.notify(src,
             { title = 'Keine Berechtigung', description = 'Diesen Prop können nur Admins platzieren.', type = 'error' })
         return
     end
 
-    -- Job-Prüfung
     if propConfig.jobs and not IsAdmin(src) then
         local jobName = GetPlayerJobName(src)
         local hasJob  = false
-
         if jobName then
             for _, allowedJob in ipairs(propConfig.jobs) do
                 if allowedJob == jobName then
-                    hasJob = true
-                    break
+                    hasJob = true; break
                 end
             end
         end
-
         if not hasJob then
             lib.notify(src, {
                 title       = 'Falscher Job',
@@ -210,33 +178,26 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
         end
     end
 
-    -- Prop-Limit prüfen
     local identifier = GetIdentifier(src)
     if Config.MaxPropsPerPlayer > 0 and not IsAdmin(src) then
         if CountPlayerProps(identifier) >= Config.MaxPropsPerPlayer then
             lib.notify(src, {
                 title       = 'Limit erreicht',
                 description = ('Du hast bereits %d/%d Props platziert.'):format(
-                    CountPlayerProps(identifier), Config.MaxPropsPerPlayer
-                ),
+                    CountPlayerProps(identifier), Config.MaxPropsPerPlayer),
                 type        = 'warning',
             })
             return
         end
     end
 
-    -- Item aus Inventar nehmen
     local success = exports.ox_inventory:RemoveItem(src, itemName, 1)
     if not success then
-        lib.notify(src, {
-            title       = 'Item nicht gefunden',
-            description = 'Das Item wurde nicht in deinem Inventar gefunden.',
-            type        = 'error',
-        })
+        lib.notify(src,
+            { title = 'Item nicht gefunden', description = 'Das Item wurde nicht in deinem Inventar gefunden.', type =
+            'error' })
         return
     end
-
-    -- ── Prop erstellen ────────────────────────────────────
 
     local propId        = nextId
     nextId              = nextId + 1
@@ -257,22 +218,17 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
 
     placedProps[propId] = propData
 
-    -- ── Datenbank speichern (nur wenn persistent) ─────────
     if propConfig.persistent then
         MySQL.insert(
             [[INSERT INTO prop_placement_props
               (id, item_name, model, x, y, z, rotation, owner_identifier, owner_job, persistent)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)]],
-            {
-                propId, itemName, propConfig.model,
-                posData.x, posData.y, posData.z,
-                posData.rotation or 0.0,
-                identifier, jobName, 1,
-            }
+            { propId, itemName, propConfig.model,
+                posData.x, posData.y, posData.z, posData.rotation or 0.0,
+                identifier, jobName, 1 }
         )
     end
 
-    -- ── An alle Clients broadcasten ────────────────────────
     TriggerClientEvent('prop_placement:propPlaced', -1, propData)
 
     lib.notify(src, {
@@ -281,7 +237,6 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
         type        = 'success',
     })
 
-    -- Logging
     LogPropAction('place', src, identifier, GetPlayerName(src) or 'Unbekannt',
         propId, itemName, propConfig.model,
         { x = posData.x, y = posData.y, z = posData.z, rotation = posData.rotation },
@@ -310,18 +265,14 @@ RegisterNetEvent('prop_placement:remove', function(propId)
     local propConfig = Config.Props[prop.itemName]
     local ownerOnly  = propConfig and propConfig.ownerOnly or true
 
-    -- Job-Check: gleicher Job darf entfernen wenn ownerOnly = false
     if not admin and not isOwner and ownerOnly then
-        lib.notify(src, {
-            title       = 'Keine Berechtigung',
-            description = 'Nur der Besitzer oder ein Admin kann diesen Prop entfernen.',
-            type        = 'error',
-        })
+        lib.notify(src,
+            { title = 'Keine Berechtigung', description = 'Nur der Besitzer oder ein Admin kann diesen Prop entfernen.', type =
+            'error' })
         return
     end
 
     if not admin and not isOwner and not ownerOnly then
-        -- Selben Job prüfen
         local playerJob = GetPlayerJobName(src)
         local allowed   = false
         if prop.ownerJob and playerJob and prop.ownerJob == playerJob then
@@ -339,14 +290,9 @@ RegisterNetEvent('prop_placement:remove', function(propId)
         end
     end
 
-    -- Item zurückgeben
     exports.ox_inventory:AddItem(src, prop.itemName, 1)
-
-    -- Aus Memory & DB entfernen
     placedProps[propId] = nil
     MySQL.query('DELETE FROM prop_placement_props WHERE id = ?', { propId })
-
-    -- An alle broadcasten
     TriggerClientEvent('prop_placement:propRemoved', -1, propId)
 
     lib.notify(src, {
@@ -355,7 +301,6 @@ RegisterNetEvent('prop_placement:remove', function(propId)
         type        = 'success',
     })
 
-    -- Logging
     LogPropAction('remove', src, GetIdentifier(src), GetPlayerName(src) or 'Unbekannt',
         propId, prop.itemName, prop.model,
         { x = prop.x, y = prop.y, z = prop.z, rotation = prop.rotation },
@@ -366,12 +311,11 @@ RegisterNetEvent('prop_placement:remove', function(propId)
 end)
 
 -- ─────────────────────────────────────────────────────────
--- NET EVENT: Admin – Prop-Item geben
+-- NET EVENT: Admin – Item geben
 -- ─────────────────────────────────────────────────────────
 
 RegisterNetEvent('prop_placement:adminGive', function(targetId, itemName, amount)
     local src = source
-
     if not IsAdmin(src) then
         lib.notify(src, { title = 'Keine Berechtigung', type = 'error' })
         return
@@ -382,34 +326,25 @@ RegisterNetEvent('prop_placement:adminGive', function(targetId, itemName, amount
         lib.notify(src, { title = 'Fehler', description = 'Unbekanntes Item: ' .. itemName, type = 'error' })
         return
     end
-
     if not GetPlayerName(targetId) then
         lib.notify(src, { title = 'Fehler', description = 'Spieler ' .. targetId .. ' nicht gefunden.', type = 'error' })
         return
     end
 
     amount = math.max(1, math.min(amount or 1, 99))
-
     exports.ox_inventory:AddItem(targetId, itemName, amount)
 
-    lib.notify(src, {
-        title       = 'Item gegeben',
-        description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId),
-        type        = 'success',
-    })
-    lib.notify(targetId, {
-        title       = 'Item erhalten',
-        description = ('Du hast %dx %s erhalten.'):format(amount, propConfig.label),
-        type        = 'success',
-    })
+    lib.notify(src,
+        { title = 'Item gegeben', description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId), type =
+        'success' })
+    lib.notify(targetId,
+        { title = 'Item erhalten', description = ('Du hast %dx %s erhalten.'):format(amount, propConfig.label), type =
+        'success' })
 
-    -- Logging
     LogPropAction('admin_give', src, GetIdentifier(src), GetPlayerName(src) or 'Unbekannt',
         nil, itemName, nil, nil,
         { target_id = targetId, target_name = GetPlayerName(targetId), amount = amount }
     )
-
-    DebugLog(('Admin %d gab %dx %s an Spieler %d'):format(src, amount, itemName, targetId))
 end)
 
 -- ─────────────────────────────────────────────────────────
@@ -418,7 +353,6 @@ end)
 
 RegisterNetEvent('prop_placement:adminClearAll', function()
     local src = source
-
     if not IsAdmin(src) then
         lib.notify(src, { title = 'Keine Berechtigung', type = 'error' })
         return
@@ -433,13 +367,8 @@ RegisterNetEvent('prop_placement:adminClearAll', function()
     MySQL.query('DELETE FROM prop_placement_props')
     TriggerClientEvent('prop_placement:syncAll', -1, {})
 
-    lib.notify(src, {
-        title       = 'Props gelöscht',
-        description = count .. ' Props wurden entfernt.',
-        type        = 'success',
-    })
+    lib.notify(src, { title = 'Props gelöscht', description = count .. ' Props wurden entfernt.', type = 'success' })
 
-    -- Logging
     LogPropAction('admin_clear', src, GetIdentifier(src), GetPlayerName(src) or 'Konsole',
         nil, nil, nil, nil, { deleted_count = count }
     )
@@ -448,7 +377,7 @@ RegisterNetEvent('prop_placement:adminClearAll', function()
 end)
 
 -- ─────────────────────────────────────────────────────────
--- NET EVENT: Admin-Menü anfordern
+-- NET EVENT: Admin-Menü
 -- ─────────────────────────────────────────────────────────
 
 RegisterNetEvent('prop_placement:requestAdminMenu', function()
@@ -456,16 +385,13 @@ RegisterNetEvent('prop_placement:requestAdminMenu', function()
     if IsAdmin(src) then
         TriggerClientEvent('prop_placement:openAdminMenu', src)
     else
-        lib.notify(src, {
-            title       = 'Keine Berechtigung',
-            description = 'Das Admin-Menü ist nur für Admins zugänglich.',
-            type        = 'error',
-        })
+        lib.notify(src,
+            { title = 'Keine Berechtigung', description = 'Das Admin-Menü ist nur für Admins zugänglich.', type = 'error' })
     end
 end)
 
 -- ─────────────────────────────────────────────────────────
--- Server-Konsolen-Befehle (für Admins in der Konsole / RCON)
+-- Konsolen-Befehle
 -- ─────────────────────────────────────────────────────────
 
 RegisterCommand('prop_clearall', function(src)
@@ -477,10 +403,9 @@ RegisterCommand('prop_clearall', function(src)
     end
     MySQL.query('DELETE FROM prop_placement_props')
     TriggerClientEvent('prop_placement:syncAll', -1, {})
-    print(('[prop_placement] Alle %d Props gelöscht (Konsolenbefehl).'):format(count))
+    print(('[prop_placement] Alle %d Props gelöscht.'):format(count))
 end, true)
 
--- /giveprop [item] [menge] – gibt sich selbst ein Prop-Item (nur Admins & Konsole)
 RegisterCommand('giveprop', function(src, args)
     if src ~= 0 and not IsAdmin(src) then
         lib.notify(src, { title = 'Keine Berechtigung', type = 'error' })
@@ -492,9 +417,7 @@ RegisterCommand('giveprop', function(src, args)
 
     if not itemName then
         if src == 0 then
-            print('[prop_placement] Verwendung: giveprop <item_name> [menge]')
-            print('[prop_placement] Verfügbare Items:')
-            for name in pairs(Config.Props) do print('  - ' .. name) end
+            print('[prop_placement] Verwendung: giveprop <item_name> <spieler_id> [menge]')
         else
             lib.notify(src, { title = 'Verwendung', description = '/giveprop <item> [menge]', type = 'inform' })
         end
@@ -511,7 +434,6 @@ RegisterCommand('giveprop', function(src, args)
         return
     end
 
-    -- Bei Konsolenbefehl muss eine Ziel-ID angegeben werden
     local target = src
     if src == 0 then
         target = tonumber(args[2])
@@ -526,15 +448,13 @@ RegisterCommand('giveprop', function(src, args)
 
     local label = Config.Props[itemName].label
     if src ~= 0 then
-        lib.notify(src, {
-            title       = 'Item erhalten ✅',
-            description = ('%dx %s ins Inventar gelegt.'):format(amount, label),
-            type        = 'success',
-        })
+        lib.notify(src,
+            { title = 'Item erhalten ✅', description = ('%dx %s ins Inventar gelegt.'):format(amount, label), type =
+            'success' })
     else
         print(('[prop_placement] %dx %s → Spieler %d gegeben.'):format(amount, label, target))
     end
-end, false) -- false = auch ohne Ace erlaubt, Prüfung passiert im Code
+end, false)
 
 RegisterCommand('prop_list', function(src)
     if src ~= 0 and not IsAdmin(src) then return end

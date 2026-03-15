@@ -5,7 +5,6 @@
     ╚══════════════════════════════════════════════════════╝
 ]]
 
--- Lokale Prop-Tabelle: [propId (int)] = entity (int)
 local placedProps = {}
 
 -- ─────────────────────────────────────────────────────────
@@ -18,9 +17,6 @@ local function DebugLog(msg)
     end
 end
 
---- Modell laden mit Timeout-Sicherung
---- @param model number  GetHashKey(…)
---- @return bool
 local function LoadModel(model)
     if HasModelLoaded(model) then return true end
     RequestModel(model)
@@ -34,7 +30,7 @@ local function LoadModel(model)
 end
 
 -- ─────────────────────────────────────────────────────────
--- ox_target an einem platzierten Prop registrieren
+-- ox_target registrieren
 -- ─────────────────────────────────────────────────────────
 
 local function RegisterPropTarget(propId, entity, propData)
@@ -49,7 +45,6 @@ local function RegisterPropTarget(propId, entity, propData)
         },
     }
 
-    -- Optional: Info-Option
     if Config.Debug then
         table.insert(options, {
             label    = 'Prop-Info [Debug]',
@@ -72,48 +67,34 @@ local function RegisterPropTarget(propId, entity, propData)
 end
 
 -- ─────────────────────────────────────────────────────────
--- Einen einzelnen Prop spawnen
+-- Prop spawnen / entfernen
 -- ─────────────────────────────────────────────────────────
 
 local function SpawnProp(propData)
     local propId = propData.id
     local model  = GetHashKey(propData.model)
 
-    -- Bereits gespawnt → überspringen
-    if placedProps[propId] and DoesEntityExist(placedProps[propId]) then
-        DebugLog('Prop #' .. propId .. ' bereits gespawnt – überspringe.')
-        return
-    end
+    if placedProps[propId] and DoesEntityExist(placedProps[propId]) then return end
 
     if not LoadModel(model) then
         DebugLog('Modell konnte nicht geladen werden: ' .. propData.model)
         return
     end
 
-    local entity = CreateObject(
-        model,
-        propData.x, propData.y, propData.z,
-        false, false, false
-    )
+    local entity = CreateObject(model, propData.x, propData.y, propData.z, false, false, false)
 
     SetEntityRotation(entity, 0.0, 0.0, propData.rotation, 2, true)
     FreezeEntityPosition(entity, true)
     SetEntityCollision(entity, true, true)
-    SetEntityInvincible(entity, true) -- Props sollen nicht beschädigt werden
+    SetEntityInvincible(entity, true)
     SetEntityCanBeDamaged(entity, false)
 
     placedProps[propId] = entity
-
-    -- ox_target registrieren
     RegisterPropTarget(propId, entity, propData)
-
     SetModelAsNoLongerNeeded(model)
+
     DebugLog('Prop #' .. propId .. ' gespawnt (' .. propData.model .. ')')
 end
-
--- ─────────────────────────────────────────────────────────
--- Einen Prop entfernen
--- ─────────────────────────────────────────────────────────
 
 local function DespawnProp(propId)
     local entity = placedProps[propId]
@@ -124,10 +105,6 @@ local function DespawnProp(propId)
     end
     placedProps[propId] = nil
 end
-
--- ─────────────────────────────────────────────────────────
--- Alle Props löschen (z.B. beim Re-Sync)
--- ─────────────────────────────────────────────────────────
 
 local function ClearAllLocalProps()
     for id, entity in pairs(placedProps) do
@@ -143,61 +120,40 @@ end
 -- Net Events – Server → Client
 -- ─────────────────────────────────────────────────────────
 
---- Server sendet beim Spawn/Ressource-Start alle Props
 RegisterNetEvent('prop_placement:syncAll', function(propList)
     ClearAllLocalProps()
     DebugLog(('Sync: %d Props empfangen'):format(#propList))
-
-    -- ox_inventory Client-seitige useItem Registrierung
     CreateThread(function()
-        Wait(1000) -- warten bis ox_inventory bereit ist
-
-        for itemName, _ in pairs(Config.Props) do
-            local name = itemName
-
-            exports.ox_inventory:useItem(name, function(data)
-                print('[PP-DEBUG CLIENT] useItem callback: ' .. name)
-                TriggerServerEvent('prop_placement:requestPlace', name)
-            end)
+        for _, propData in ipairs(propList) do
+            SpawnProp(propData)
+            Wait(30)
         end
-
-        print('[PP-DEBUG CLIENT] Alle useItem Callbacks registriert')
     end)
 end)
 
---- Ein neuer Prop wurde von irgendjemandem platziert
 RegisterNetEvent('prop_placement:propPlaced', function(propData)
     DebugLog('Neuer Prop empfangen: #' .. propData.id)
     SpawnProp(propData)
 end)
 
---- Ein Prop wurde entfernt
 RegisterNetEvent('prop_placement:propRemoved', function(propId)
     DebugLog('Prop #' .. propId .. ' wurde entfernt')
     DespawnProp(propId)
 end)
 
---- Server fordert uns auf mit dem Platzieren anzufangen
 RegisterNetEvent('prop_placement:startPlacing', function(itemName)
-    print('[PP-DEBUG CLIENT] startPlacing empfangen für: ' .. tostring(itemName))
-
     local propConfig = Config.Props[itemName]
     if not propConfig then
-        print('[PP-DEBUG CLIENT] FEHLER: propConfig ist nil für ' .. tostring(itemName))
         lib.notify({ title = 'Fehler', description = 'Unbekannter Prop-Typ: ' .. itemName, type = 'error' })
         return
     end
-
-    print('[PP-DEBUG CLIENT] propConfig gefunden, starte Placement. Model: ' .. propConfig.model)
     StartPropPlacement(itemName, propConfig)
 end)
 
---- Admin-Menü öffnen (nur ausgelöst wenn Server die Berechtigung bestätigt hat)
 RegisterNetEvent('prop_placement:openAdminMenu', function()
-    local options = {}
-
-    -- Props sortiert anzeigen
+    local options     = {}
     local sortedItems = {}
+
     for itemName, cfg in pairs(Config.Props) do
         table.insert(sortedItems, { itemName = itemName, cfg = cfg })
     end
@@ -225,7 +181,6 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
         })
     end
 
-    -- Props-Übersicht / Aufräumen
     table.insert(options, {
         title       = '🗑 Alle Props löschen',
         description = 'Entfernt ALLE platzierten Props (DB + Clients)',
@@ -253,30 +208,23 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
 end)
 
 -- ─────────────────────────────────────────────────────────
--- Initialisierung: Sync anfordern
+-- Initialisierung
 -- ─────────────────────────────────────────────────────────
 
--- Beim Start der Ressource
 AddEventHandler('onClientResourceStart', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
-    Wait(1000) -- kurz warten bis Netzwerk bereit ist
+    Wait(1000)
     TriggerServerEvent('prop_placement:requestSync')
 end)
 
--- Beim Spieler-Spawn (Respawn, erster Spawn)
 AddEventHandler('playerSpawned', function()
     Wait(500)
     TriggerServerEvent('prop_placement:requestSync')
 end)
 
--- Bei Tod Platzierung abbrechen
 AddEventHandler('baseevents:onPlayerDied', function()
     CancelPlacementExternal()
 end)
-
--- ─────────────────────────────────────────────────────────
--- Ressource aufräumen
--- ─────────────────────────────────────────────────────────
 
 AddEventHandler('onClientResourceStop', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
@@ -285,14 +233,13 @@ AddEventHandler('onClientResourceStop', function(resourceName)
 end)
 
 -- ─────────────────────────────────────────────────────────
--- Commands (nur UI-Trigger – Berechtigung prüft Server)
+-- Commands
 -- ─────────────────────────────────────────────────────────
 
 RegisterCommand('propadmin', function()
     TriggerServerEvent('prop_placement:requestAdminMenu')
 end, false)
 
--- Debug: Alle lokalen Props zählen
 if Config.Debug then
     RegisterCommand('propdebug', function()
         local count = 0
