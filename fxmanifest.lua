@@ -4,11 +4,12 @@ game 'gta5'
 name 'prop_placement'
 description 'Modulares Prop Placement System – ox_lib / ox_inventory / ox_target'
 version '1.0.0'
-author 'D4rkst3r <https://github.com/D4rkst3r>'
+author 'Custom'
 
 shared_scripts {
     '@ox_lib/init.lua',
     'shared/config.lua',
+    'shared/props.lua', -- Props hier bearbeiten
 }
 
 client_scripts {
@@ -26,6 +27,7 @@ server_scripts {
 -- Icons fuer ox_inventory (512x512 PNG, Name = item_name.png)
 files {
     'web/images/*.png',
+    'data/items.lua',
 }
 
 lua54 'yes'

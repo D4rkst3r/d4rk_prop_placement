@@ -107,31 +107,36 @@ CreateThread(function()
 end)
 
 -- ─────────────────────────────────────────────────────────
--- ox_inventory - Items automatisch registrieren
--- Kein manuelles Eintragen in items.lua noetig!
+-- ox_inventory – Items per Export registrieren (falls unterstuetzt)
+-- Fallback: Items muessen in ox_inventory/data/items.lua stehen
 -- ---------------------------------------------------------
 
 CreateThread(function()
     Wait(500)
 
-    local resourceName = GetCurrentResourceName()
-    local items = {}
-    for itemName, cfg in pairs(Config.Props) do
-        -- Icon-Pfad: resources/[standalone]/prop_placement/web/images/<itemName>.png
-        -- Lege einfach eine PNG mit dem Item-Namen in diesen Ordner
-        local iconPath = ('nui://%s/web/images/%s.png'):format(resourceName, itemName)
+    -- Pruefen ob ox_inventory registerItems unterstuetzt
+    local ok, err = pcall(function()
+        local resourceName = GetCurrentResourceName()
+        local items = {}
+        for itemName, cfg in pairs(Config.Props) do
+            local iconPath = ('nui://%s/web/images/%s.png'):format(resourceName, itemName)
+            items[itemName] = {
+                label  = cfg.label,
+                weight = cfg.weight or 1000,
+                stack  = true,
+                close  = true,
+                image  = iconPath,
+            }
+        end
+        exports.ox_inventory:Items(items)
+    end)
 
-        items[itemName] = {
-            label  = cfg.label,
-            weight = cfg.weight or 1000,
-            stack  = true,
-            close  = true,
-            image  = iconPath,
-        }
+    if ok then
+        print('[prop_placement] ox_inventory: Items automatisch registriert.')
+    else
+        print('[prop_placement] HINWEIS: Items konnten nicht automatisch registriert werden.')
+        print('[prop_placement] Bitte die Items aus shared/props.lua manuell in ox_inventory/data/items.lua eintragen.')
     end
-
-    exports.ox_inventory:registerItems(items)
-    print(("[prop_placement] ox_inventory: Items automatisch registriert."))
 end)
 
 -- ---------------------------------------------------------

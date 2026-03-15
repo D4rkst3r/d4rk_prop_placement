@@ -1,192 +1,39 @@
 --[[
-    ╔══════════════════════════════════════════════════════╗
-    ║           prop_placement – shared/config.lua         ║
-    ╚══════════════════════════════════════════════════════╝
-
-    PROP HINZUFÜGEN:
-    ────────────────
-    ['item_name'] = {
-        label      = 'Anzeigename',
-        model      = 'prop_modell_name',   -- GTA5 Prop-Hash-Name
-        jobs       = nil,                  -- nil = alle | {'police','mechanic'} = Job-Einschränkung
-        adminOnly  = false,                -- true = nur Admins können platzieren
-        ownerOnly  = true,                 -- true = nur Besitzer/Admin darf entfernen
-        persistent = true,                 -- true = überlebt Server-Neustart (DB-Speicherung)
-    },
-
-    ITEM IN OX_INVENTORY REGISTRIEREN:
-    ─────────────────────────────────────
-    Füge das Item in ox_inventory/data/items.lua ein:
-    ['item_name'] = { label = 'Anzeigename', weight = 1000, stack = true },
+    prop_placement – shared/config.lua
+    Globale Einstellungen – Props sind in shared/props.lua
 ]]
 
 Config = {}
 
 -- ─── Debug ────────────────────────────────────────────
-Config.Debug = true -- Debug-Ausgaben in Konsole aktivieren (true/false)
+-- true = Konsolen-Logs aktivieren
+Config.Debug = true
 
 -- ─── Limits ───────────────────────────────────────────
--- Wie viele Props darf ein Spieler gleichzeitig platziert haben? (0 = unbegrenzt)
+-- Wie viele Props darf ein Spieler gleichzeitig haben? (0 = unbegrenzt)
 Config.MaxPropsPerPlayer = 15
 
 -- ─── Placement-Einstellungen ──────────────────────────
 Config.Placement = {
-    MaxDistance  = 5.0,  -- Maximale Platzierungsdistanz vom Spieler (Meter)
-    Alpha        = 160,  -- Ghost-Transparenz 0-255 (höher = sichtbarer)
-    ZStep        = 0.05, -- Höhenänderung pro Mausrad-Tick (Meter)
-    ZMin         = -2.0, -- Minimale manuelle Z-Absenkung
-    ZMax         = 5.0,  -- Maximale manuelle Z-Anhebung
-    RotationStep = 15.0, -- Grad pro Rotations-Tastendruck
-    GroundSnap   = true, -- Prop auf Boden ausrichten
+    MaxDistance  = 5.0,  -- Platzierungs-Reichweite in Metern
+    Alpha        = 160,  -- Ghost-Transparenz (0-255)
+    ZStep        = 0.05, -- Höhenänderung pro Scroll-Tick
+    ZMin         = -2.0, -- Maximale Absenkung
+    ZMax         = 5.0,  -- Maximale Anhebung
+    RotationStep = 15.0, -- Grad pro Tastendruck (Q/R)
+    GroundSnap   = true, -- Prop auf Boden einrasten
 }
 
 -- ─── Admin-Gruppen ────────────────────────────────────
--- Ace-Permission-Gruppen, die als Admin gelten
--- → Diese können alle Props entfernen, Prop-Items geben & haben kein Limit
+-- Spieler mit dem Ace 'prop_placement.admin' gelten als Admin.
+-- In server.cfg zuweisen:
+--   add_ace group.admin prop_placement.admin allow
 Config.AdminGroups = { 'admin', 'superadmin', 'god' }
 
--- ─── Prop-Definitionen ────────────────────────────────
-Config.Props = {
-
-    -- ── Allgemein ──────────────────────────────────────
-    ['wooden_crate'] = {
-        label      = 'Holzkiste',
-        model      = 'prop_box_wood01a',
-        weight     = 2000,
-        jobs       = nil,
-        adminOnly  = false,
-        ownerOnly  = true,
-        persistent = true,
-    },
-    ['metal_crate'] = {
-        label      = 'Metallkiste',
-        model      = 'prop_box_ammo02a',
-        weight     = 3000,
-        jobs       = nil,
-        adminOnly  = false,
-        ownerOnly  = true,
-        persistent = true,
-    },
-    ['plastic_bin'] = {
-        label      = 'Mülleimer',
-        model      = 'prop_bin_03a',
-        weight     = 800,
-        jobs       = nil,
-        adminOnly  = false,
-        ownerOnly  = true,
-        persistent = false,
-    },
-    ['garden_chair'] = {
-        label      = 'Gartenstuhl',
-        model      = 'prop_chair_03',
-        weight     = 1500,
-        jobs       = nil,
-        adminOnly  = false,
-        ownerOnly  = true,
-        persistent = true,
-    },
-    ['folding_table'] = {
-        label      = 'Klapptisch',
-        model      = 'prop_table_01a',
-        weight     = 2500,
-        jobs       = nil,
-        adminOnly  = false,
-        ownerOnly  = true,
-        persistent = true,
-    },
-
-    -- ── Polizei / Einsatzkräfte ─────────────────────────
-    ['traffic_cone'] = {
-        label      = 'Verkehrskegel',
-        model      = 'prop_roadcone01a',
-        weight     = 500,
-        jobs       = { 'police', 'ambulance', 'mechanic' },
-        adminOnly  = false,
-        ownerOnly  = false, -- jeder berechtigte Job kann entfernen
-        persistent = false,
-    },
-    ['police_barrier'] = {
-        label      = 'Polizeiabsperrung',
-        model      = 'prop_mp_barrier_01b',
-        weight     = 3000,
-        jobs       = { 'police' },
-        adminOnly  = false,
-        ownerOnly  = false,
-        persistent = false,
-    },
-    ['road_barrier'] = {
-        label      = 'Straßensperre',
-        model      = 'prop_mp_barrier_02b',
-        weight     = 5000,
-        jobs       = { 'police', 'mechanic' },
-        adminOnly  = false,
-        ownerOnly  = false,
-        persistent = false,
-    },
-    ['spike_strip'] = {
-        label      = 'Nagelstreifen',
-        model      = 'prop_ld_stinger_s',
-        weight     = 1000,
-        jobs       = { 'police' },
-        adminOnly  = false,
-        ownerOnly  = false,
-        persistent = false,
-    },
-
-    -- ── Baustelle / Mechaniker ──────────────────────────
-    ['worklight'] = {
-        label      = 'Baustellenlampe',
-        model      = 'prop_worklight_03a',
-        weight     = 2000,
-        jobs       = { 'mechanic', 'construction' },
-        adminOnly  = false,
-        ownerOnly  = true,
-        persistent = false,
-    },
-    ['generator'] = {
-        label      = 'Generator',
-        model      = 'prop_generator_01a',
-        weight     = 8000,
-        jobs       = { 'mechanic', 'construction' },
-        adminOnly  = false,
-        ownerOnly  = true,
-        persistent = false,
-    },
-    ['scaffolding'] = {
-        label      = 'Baugerüst',
-        model      = 'prop_scaffolding_01',
-        weight     = 10000,
-        jobs       = { 'construction' },
-        adminOnly  = false,
-        ownerOnly  = true,
-        persistent = true,
-    },
-
-    -- ── Admin-Only ──────────────────────────────────────
-    ['admin_barrier_large'] = {
-        label      = 'Große Absperrung (Admin)',
-        model      = 'prop_barrier_work05',
-        weight     = 1,
-        jobs       = nil,
-        adminOnly  = true,
-        ownerOnly  = false,
-        persistent = true,
-    },
-    ['admin_tent'] = {
-        label      = 'Zelt (Admin)',
-        model      = 'prop_fbi_tent01',
-        weight     = 1,
-        jobs       = nil,
-        adminOnly  = true,
-        ownerOnly  = false,
-        persistent = true,
-    },
-}
-
--- ─── ox_target Optionen ───────────────────────────────
-Config.TargetDistance = 2.0 -- Interaktionsdistanz an platzierten Props
+-- ─── ox_target ────────────────────────────────────────
+Config.TargetDistance = 2.0
 
 -- ─── Inventar-Keybind ─────────────────────────────────
--- true  = eigener TAB-Keybind zum Öffnen (nur zum Testen / falls kein anderes System)
--- false = deaktivieren wenn der Server ein eigenes Inventar-System hat
+-- true  = TAB öffnet ox_inventory (nur zum Testen)
+-- false = ausschalten wenn der Server ein eigenes Inventar-System hat
 Config.UseBuiltinInventoryKey = false
