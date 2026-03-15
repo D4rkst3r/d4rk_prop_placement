@@ -146,25 +146,21 @@ end)
 CreateThread(function()
     Wait(500) -- Warten bis ox_inventory bereit ist
 
-    for itemName, _ in pairs(Config.Props) do
-        -- Schließung über lokale Variable für korrekte Referenz im Loop
-        local capturedItemName = itemName
+    exports.ox_inventory:registerHook('useItem', function(payload)
+        local src      = payload.source
+        local itemName = payload.item and payload.item.name
 
-        exports.ox_inventory:registerHook('useItem', function(payload)
-            local src = payload.source
+        -- Nur unsere Prop-Items abfangen
+        if not itemName or not Config.Props[itemName] then return end
+        if not src or src == 0 then return end
 
-            -- Prüfen ob Spieler gültig ist
-            if not src or src == 0 then return end
+        DebugLog(('Item-Use: %s von Spieler %d'):format(itemName, src))
 
-            DebugLog(('Item-Use: %s von Spieler %d'):format(capturedItemName, src))
+        TriggerClientEvent('prop_placement:startPlacing', src, itemName)
 
-            -- Platzierung starten (Validierung passiert bei 'place'-Event)
-            TriggerClientEvent('prop_placement:startPlacing', src, capturedItemName)
-
-            -- Item NICHT sofort verbrauchen – Verbrauch erst bei Serverbestätigung
-            return false
-        end, { itemFilter = { [capturedItemName] = true } })
-    end
+        -- false = Item NICHT sofort verbrauchen (passiert erst bei Serverbestätigung)
+        return false
+    end)
 
     DebugLog('Item-Hooks für ' .. #(function()
         local t = {}; for k in pairs(Config.Props) do table.insert(t, k) end; return t
