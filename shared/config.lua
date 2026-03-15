@@ -15,7 +15,7 @@ Config.MaxPropsPerPlayer = 15
 
 -- ─── Placement-Einstellungen ──────────────────────────
 Config.Placement = {
-    MaxDistance  = 5.0,  -- Platzierungs-Reichweite in Metern
+    MaxDistance  = 10.0, -- Platzierungs-Reichweite in Metern
     Alpha        = 160,  -- Ghost-Transparenz (0-255)
     ZStep        = 0.05, -- Höhenänderung pro Scroll-Tick
     ZMin         = -2.0, -- Maximale Absenkung
@@ -36,4 +36,4 @@ Config.TargetDistance = 2.0
 -- ─── Inventar-Keybind ─────────────────────────────────
 -- true  = TAB öffnet ox_inventory (nur zum Testen)
 -- false = ausschalten wenn der Server ein eigenes Inventar-System hat
-Config.UseBuiltinInventoryKey = true
+Config.UseBuiltinInventoryKey = false

@@ -24,21 +24,21 @@
 
 -- ─── Logging-Konfiguration ────────────────────────────────
 Config.Logging = {
-    Enabled    = true,
+    Enabled   = true,
 
     -- API-Schlüssel – UNBEDINGT ÄNDERN!
     -- Generiere einen zufälligen Key z.B.: https://generate-random.org/api-key-generator
-    ApiKey     = 'CHANGE_ME_USE_A_SECURE_RANDOM_KEY',
+    ApiKey    = 'Z9ijq5p2rfk6BNVa6Vcv0OPqvMN5mkH3',
 
     -- Port auf dem die HTTP API läuft (FiveM nutzt den Ressource-HTTP-Handler)
     -- Erreichbar über: http://SERVER_IP:30120/prop_placement/...
     -- (30120 ist der Standard-FiveM-Port – kein separater Port nötig!)
 
     -- Wie viele Log-Einträge pro API-Seite
-    PageSize   = 50,
+    PageSize  = 50,
 
     -- Logs nach X Tagen automatisch löschen (0 = deaktivieren)
-    AutoPurge  = 30,
+    AutoPurge = 30,
 }
 
 -- ─────────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ end
 
 local function CheckApiKey(req)
     local key = (req.headers and req.headers['x-api-key'])
-               or (req.query and req.query['api_key'])
+        or (req.query and req.query['api_key'])
     return key == Config.Logging.ApiKey
 end
 
@@ -74,7 +74,7 @@ function LogPropAction(action, source, identifier, playerName, propId, itemName,
     if not Config.Logging.Enabled then return end
 
     local coordsJson = coords and json.encode(coords) or nil
-    local extraJson  = extra  and json.encode(extra)  or nil
+    local extraJson  = extra and json.encode(extra) or nil
 
     MySQL.insert(
         [[INSERT INTO prop_placement_logs
@@ -184,12 +184,12 @@ SetHttpHandler(function(req, res)
         ]])
 
         JsonResponse(res, 200, {
-            total_logs     = total and total[1] and total[1].c or 0,
-            last_24h       = recentDay and recentDay[1] and recentDay[1].c or 0,
-            by_action      = byAction  or {},
-            top_items      = topItems  or {},
-            top_placers    = topPlacers or {},
-            generated_at   = os.time(),
+            total_logs   = total and total[1] and total[1].c or 0,
+            last_24h     = recentDay and recentDay[1] and recentDay[1].c or 0,
+            by_action    = byAction or {},
+            top_items    = topItems or {},
+            top_placers  = topPlacers or {},
+            generated_at = os.time(),
         })
         return
     end
@@ -268,20 +268,20 @@ SetHttpHandler(function(req, res)
         end
 
         JsonResponse(res, 200, {
-            data       = logs,
-            pagination = {
-                page       = page,
-                page_size  = pageSize,
-                total      = total,
+            data         = logs,
+            pagination   = {
+                page        = page,
+                page_size   = pageSize,
+                total       = total,
                 total_pages = math.ceil(total / pageSize),
             },
-            filters = {
-                action     = query.action     or nil,
-                item       = query.item       or nil,
+            filters      = {
+                action     = query.action or nil,
+                item       = query.item or nil,
                 identifier = query.identifier or nil,
-                player     = query.player     or nil,
-                from       = query.from       or nil,
-                to         = query.to         or nil,
+                player     = query.player or nil,
+                from       = query.from or nil,
+                to         = query.to or nil,
             },
             generated_at = os.time(),
         })
@@ -289,11 +289,14 @@ SetHttpHandler(function(req, res)
     end
 
     -- 404 für unbekannte Pfade
-    JsonResponse(res, 404, { error = 'Not Found', available = {
-        '/prop_placement/health',
-        '/prop_placement/logs',
-        '/prop_placement/stats',
-    }})
+    JsonResponse(res, 404, {
+        error = 'Not Found',
+        available = {
+            '/prop_placement/health',
+            '/prop_placement/logs',
+            '/prop_placement/stats',
+        }
+    })
 end)
 
 print('[prop_placement] HTTP API aktiv → http://SERVER_IP:30120/prop_placement/logs')

@@ -61,8 +61,8 @@ local function RegisterPropTarget(propId, entity, propData)
                     description = ('Item: %s\nModel: %s\nBesitzer: %s'):format(
                         propData.itemName, propData.model, propData.ownerIdentifier or '?'
                     ),
-                    type     = 'inform',
-                    duration = 6000,
+                    type        = 'inform',
+                    duration    = 6000,
                 })
             end,
         })
@@ -99,7 +99,7 @@ local function SpawnProp(propData)
     SetEntityRotation(entity, 0.0, 0.0, propData.rotation, 2, true)
     FreezeEntityPosition(entity, true)
     SetEntityCollision(entity, true, true)
-    SetEntityInvincible(entity, true)   -- Props sollen nicht beschädigt werden
+    SetEntityInvincible(entity, true) -- Props sollen nicht beschädigt werden
     SetEntityCanBeDamaged(entity, false)
 
     placedProps[propId] = entity
@@ -148,11 +148,20 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
     ClearAllLocalProps()
     DebugLog(('Sync: %d Props empfangen'):format(#propList))
 
+    -- ox_inventory Client-seitige useItem Registrierung
     CreateThread(function()
-        for _, propData in ipairs(propList) do
-            SpawnProp(propData)
-            Wait(30) -- gestaffelt spawnen → weniger Hitches
+        Wait(1000) -- warten bis ox_inventory bereit ist
+
+        for itemName, _ in pairs(Config.Props) do
+            local name = itemName
+
+            exports.ox_inventory:useItem(name, function(data)
+                print('[PP-DEBUG CLIENT] useItem callback: ' .. name)
+                TriggerServerEvent('prop_placement:requestPlace', name)
+            end)
         end
+
+        print('[PP-DEBUG CLIENT] Alle useItem Callbacks registriert')
     end)
 end)
 
@@ -170,11 +179,16 @@ end)
 
 --- Server fordert uns auf mit dem Platzieren anzufangen
 RegisterNetEvent('prop_placement:startPlacing', function(itemName)
+    print('[PP-DEBUG CLIENT] startPlacing empfangen für: ' .. tostring(itemName))
+
     local propConfig = Config.Props[itemName]
     if not propConfig then
+        print('[PP-DEBUG CLIENT] FEHLER: propConfig ist nil für ' .. tostring(itemName))
         lib.notify({ title = 'Fehler', description = 'Unbekannter Prop-Typ: ' .. itemName, type = 'error' })
         return
     end
+
+    print('[PP-DEBUG CLIENT] propConfig gefunden, starte Placement. Model: ' .. propConfig.model)
     StartPropPlacement(itemName, propConfig)
 end)
 
@@ -200,8 +214,8 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
             description = ('Model: %s\nJobs: %s'):format(cfg.model, jobStr),
             onSelect    = function()
                 local input = lib.inputDialog('Prop-Item geben', {
-                    { type = 'number', label = 'Server-ID des Spielers',  required = true, min = 1 },
-                    { type = 'number', label = 'Anzahl',                  default = 1, min = 1, max = 99 },
+                    { type = 'number', label = 'Server-ID des Spielers', required = true, min = 1 },
+                    { type = 'number', label = 'Anzahl',                 default = 1,     min = 1, max = 99 },
                 })
                 if input and input[1] then
                     TriggerServerEvent('prop_placement:adminGive',
@@ -215,11 +229,11 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
     table.insert(options, {
         title       = '🗑 Alle Props löschen',
         description = 'Entfernt ALLE platzierten Props (DB + Clients)',
-        metadata    = {{ label = 'Achtung', value = 'Kann nicht rückgängig gemacht werden!' }},
+        metadata    = { { label = 'Achtung', value = 'Kann nicht rückgängig gemacht werden!' } },
         onSelect    = function()
             lib.alertDialog({
-                header  = 'Alle Props löschen?',
-                content = 'Diese Aktion löscht alle Props dauerhaft aus der Datenbank.',
+                header   = 'Alle Props löschen?',
+                content  = 'Diese Aktion löscht alle Props dauerhaft aus der Datenbank.',
                 centered = true,
                 cancel   = true,
             }):next(function(confirmed)

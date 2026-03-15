@@ -143,30 +143,15 @@ end)
 -- ox_inventory – Item-Use Hooks (einer pro Prop-Typ)
 -- ─────────────────────────────────────────────────────────
 
-CreateThread(function()
-    Wait(500)
+-- Items-Registrierung anpassen (consume = 0 hinzufügen):
+AddEventHandler('ox_inventory:usedItem', function(playerId, name, slotId, metadata)
+    print(('[PP-DEBUG] ox_inventory:usedItem → Spieler: %d | Item: %s'):format(playerId, tostring(name)))
 
-    -- Alle Prop-Item-Namen in einen Filter packen
-    local itemFilter = {}
-    for itemName in pairs(Config.Props) do
-        itemFilter[itemName] = true
-    end
+    if not Config.Props[name] then return end
+    if not playerId or playerId == 0 then return end
 
-    exports.ox_inventory:registerHook('useItem', function(payload)
-        local src      = payload.source
-        local itemName = payload.item and payload.item.name
-
-        if not src or src == 0 then return end
-        if not itemName or not Config.Props[itemName] then return end
-
-        DebugLog(('Item-Use: %s von Spieler %d'):format(itemName, src))
-        TriggerClientEvent('prop_placement:startPlacing', src, itemName)
-
-        -- false = Item NICHT verbrauchen (RemoveItem passiert erst bei Platzierung)
-        return false
-    end, { itemFilter = itemFilter })
-
-    DebugLog('useItem Hook registriert für alle Props.')
+    DebugLog(('Item-Use: %s von Spieler %d'):format(name, playerId))
+    TriggerClientEvent('prop_placement:startPlacing', playerId, name)
 end)
 
 -- ─────────────────────────────────────────────────────────
