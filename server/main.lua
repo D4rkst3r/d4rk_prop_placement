@@ -95,8 +95,6 @@ end
 
 local function CreatePropEntity(model, x, y, z, rotation)
     local hash   = GetHashKey(model)
-    -- CreateObjectNoOffset: verhindert automatisches Bodensnapping beim Erstellen
-    -- isNetwork=true → Entity wird an alle Clients gestreamt, NetID verfügbar
     local entity = CreateObjectNoOffset(hash, x, y, z, true, false, false)
     if not DoesEntityExist(entity) then
         DebugLog('FEHLER: Entity konnte nicht erstellt werden für Modell: ' .. model)
@@ -105,15 +103,22 @@ local function CreatePropEntity(model, x, y, z, rotation)
     FreezeEntityPosition(entity, true)
     SetEntityRotation(entity, 0.0, 0.0, rotation or 0.0, 2, true)
 
-    -- WICHTIG: Einen Frame warten damit FiveM die Entity im Netzwerk registriert.
-    -- Ohne Wait liefert NetworkGetNetworkIdFromEntity einen ungültigen Wert (0xFFFD).
-    Wait(0)
+    -- Allen Clients mitteilen dass diese Entity existiert (beschleunigt NetID-Vergabe)
+    NetworkSetEntityExistsOnAllMachines(entity, true)
 
-    local netId = NetworkGetNetworkIdFromEntity(entity)
+    -- Retry-Loop bis FiveM die Entity im Netzwerk registriert hat.
+    -- NetworkGetNetworkIdFromEntity liefert 65532/65533 (0xFFFC/0xFFFD) solange
+    -- die Registration noch aussteht – das kann mehrere Ticks dauern.
+    local netId   = 0
+    local attempt = 0
+    repeat
+        Wait(50)
+        netId   = NetworkGetNetworkIdFromEntity(entity)
+        attempt = attempt + 1
+    until (netId > 0 and netId < 65000) or attempt >= 40 -- max 2s
 
-    -- Sanity-Check: ungültige NetID erkennen (0 oder Sentinel-Werte wie 65533/0xFFFD)
-    if not netId or netId == 0 or netId > 65000 then
-        DebugLog(('FEHLER: Ungültige NetID %s für Modell %s – Entity wird gelöscht'):format(tostring(netId), model))
+    if netId == 0 or netId >= 65000 then
+        DebugLog(('FEHLER: NetID nach 40 Versuchen ungültig (%d) für %s'):format(netId, model))
         DeleteEntity(entity)
         return nil, nil
     end
