@@ -30,12 +30,16 @@ local function WaitForNetEntity(netId, timeoutMs)
     local waited = 0
     timeoutMs = timeoutMs or 5000
     while waited < timeoutMs do
-        local entity = NetToObj(netId)
-        if DoesEntityExist(entity) then
-            return entity
+        -- Erst prüfen ob die NetID überhaupt bekannt ist bevor NetToObj aufgerufen wird.
+        -- NetToObj ohne diesen Check verursacht "GetNetworkObject: no object by ID" Spam.
+        if NetworkDoesEntityExistWithNetworkId(netId) then
+            local entity = NetToObj(netId)
+            if DoesEntityExist(entity) then
+                return entity
+            end
         end
-        Wait(10)
-        waited = waited + 10
+        Wait(100)
+        waited = waited + 100
     end
     return nil
 end
@@ -71,6 +75,10 @@ end
 
 local function RegisterPropTarget(propId, entity, propData)
     propTargets[propId] = entity
+
+    -- Client-side Flags die der Server nicht setzen kann
+    SetEntityInvincible(entity, true)
+    SetEntityCanBeDamaged(entity, false)
 
     local options = {
         {

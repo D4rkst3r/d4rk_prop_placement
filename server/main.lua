@@ -104,9 +104,20 @@ local function CreatePropEntity(model, x, y, z, rotation)
     end
     FreezeEntityPosition(entity, true)
     SetEntityRotation(entity, 0.0, 0.0, rotation or 0.0, 2, true)
-    SetEntityInvincible(entity, true)
-    SetEntityCanBeDamaged(entity, false)
+
+    -- WICHTIG: Einen Frame warten damit FiveM die Entity im Netzwerk registriert.
+    -- Ohne Wait liefert NetworkGetNetworkIdFromEntity einen ungültigen Wert (0xFFFD).
+    Wait(0)
+
     local netId = NetworkGetNetworkIdFromEntity(entity)
+
+    -- Sanity-Check: ungültige NetID erkennen (0 oder Sentinel-Werte wie 65533/0xFFFD)
+    if not netId or netId == 0 or netId > 65000 then
+        DebugLog(('FEHLER: Ungültige NetID %s für Modell %s – Entity wird gelöscht'):format(tostring(netId), model))
+        DeleteEntity(entity)
+        return nil, nil
+    end
+
     DebugLog(('Entity erstellt: model=%s | entity=%d | netId=%d'):format(model, entity, netId))
     return entity, netId
 end
