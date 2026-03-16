@@ -18,10 +18,10 @@
 ]]
 
 Config.Logging = {
-    Enabled   = true,
-    ApiKey    = 'Z9ijq5p2rfk6BNVa6Vcv0OPqvMN5mkH3', -- ÄNDERN!
-    PageSize  = 50,
-    AutoPurge = 30,
+  Enabled   = true,
+  ApiKey    = 'Z9ijq5p2rfk6BNVa6Vcv0OPqvMN5mkH3', -- ÄNDERN!
+  PageSize  = 50,
+  AutoPurge = 30,
 }
 
 -- ─────────────────────────────────────────────────────────
@@ -29,30 +29,30 @@ Config.Logging = {
 -- ─────────────────────────────────────────────────────────
 
 local function JsonResponse(res, status, data)
-    res.writeHead(status, { ['Content-Type'] = 'application/json' })
-    res.send(json.encode(data))
+  res.writeHead(status, { ['Content-Type'] = 'application/json' })
+  res.send(json.encode(data))
 end
 
 local function HtmlResponse(res, html)
-    res.writeHead(200, { ['Content-Type'] = 'text/html; charset=utf-8' })
-    res.send(html)
+  res.writeHead(200, { ['Content-Type'] = 'text/html; charset=utf-8' })
+  res.send(html)
 end
 
 local function ParseRequest(fullPath)
-    local path     = fullPath:match('^([^%?]+)') or fullPath
-    local query    = {}
-    local queryStr = fullPath:match('%?(.+)$')
-    if queryStr then
-        for key, value in queryStr:gmatch('([^&=]+)=([^&]*)') do
-            query[key] = value
-        end
+  local path     = fullPath:match('^([^%?]+)') or fullPath
+  local query    = {}
+  local queryStr = fullPath:match('%?(.+)$')
+  if queryStr then
+    for key, value in queryStr:gmatch('([^&=]+)=([^&]*)') do
+      query[key] = value
     end
-    return path, query
+  end
+  return path, query
 end
 
 local function CheckApiKey(req, query)
-    local key = (req.headers and req.headers['x-api-key']) or query['api_key']
-    return key == Config.Logging.ApiKey
+  local key = (req.headers and req.headers['x-api-key']) or query['api_key']
+  return key == Config.Logging.ApiKey
 end
 
 -- ─────────────────────────────────────────────────────────
@@ -60,23 +60,23 @@ end
 -- ─────────────────────────────────────────────────────────
 
 function LogPropAction(action, source, identifier, playerName, propId, itemName, model, coords, extra)
-    if not Config.Logging.Enabled then return end
+  if not Config.Logging.Enabled then return end
 
-    local coordsJson = coords and json.encode(coords) or nil
-    local extraJson  = extra and json.encode(extra) or nil
+  local coordsJson = coords and json.encode(coords) or nil
+  local extraJson  = extra and json.encode(extra) or nil
 
-    MySQL.insert(
-        [[INSERT INTO prop_placement_logs
+  MySQL.insert(
+    [[INSERT INTO prop_placement_logs
           (action, server_id, identifier, player_name, prop_id, item_name, model, coords, extra)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)]],
-        { action, source, identifier, playerName, propId, itemName, model, coordsJson, extraJson }
-    )
+    { action, source, identifier, playerName, propId, itemName, model, coordsJson, extraJson }
+  )
 
-    if Config.Debug then
-        print(('[prop_placement][LOG] %s | %s | Item: %s | PropID: %s'):format(
-            action, playerName, tostring(itemName), tostring(propId)
-        ))
-    end
+  if Config.Debug then
+    print(('[prop_placement][LOG] %s | %s | Item: %s | PropID: %s'):format(
+      action, playerName, tostring(itemName), tostring(propId)
+    ))
+  end
 end
 
 -- ─────────────────────────────────────────────────────────
@@ -84,18 +84,18 @@ end
 -- ─────────────────────────────────────────────────────────
 
 if Config.Logging.Enabled and Config.Logging.AutoPurge > 0 then
-    CreateThread(function()
-        while true do
-            Wait(3600 * 1000)
-            local deleted = MySQL.query.await(
-                'DELETE FROM prop_placement_logs WHERE created_at < (NOW() - INTERVAL ? DAY)',
-                { Config.Logging.AutoPurge }
-            )
-            if deleted and deleted.affectedRows and deleted.affectedRows > 0 then
-                print(('[prop_placement] Auto-Purge: %d Logs gelöscht.'):format(deleted.affectedRows))
-            end
-        end
-    end)
+  CreateThread(function()
+    while true do
+      Wait(3600 * 1000)
+      local deleted = MySQL.query.await(
+        'DELETE FROM prop_placement_logs WHERE created_at < (NOW() - INTERVAL ? DAY)',
+        { Config.Logging.AutoPurge }
+      )
+      if deleted and deleted.affectedRows and deleted.affectedRows > 0 then
+        print(('[prop_placement] Auto-Purge: %d Logs gelöscht.'):format(deleted.affectedRows))
+      end
+    end
+  end)
 end
 
 -- ─────────────────────────────────────────────────────────
@@ -279,10 +279,10 @@ async function loadLogs() {
       const date   = new Date(log.created_at).toLocaleString('de-DE');
       const actCls = 'action-' + log.action;
       const coords = log.coords
-        ? (log.coords.x ? log.coords.x.toFixed(1) : '?') + ' / '
-        + (log.coords.y ? log.coords.y.toFixed(1) : '?') + ' / '
-        + (log.coords.z ? log.coords.z.toFixed(1) : '?')
-        : '–';
+          ? (log.coords.x ? log.coords.x.toFixed(4) : '?') + ', '
+          + (log.coords.y ? log.coords.y.toFixed(4) : '?') + ', '
+          + (log.coords.z ? log.coords.z.toFixed(4) : '?')
+          : '–';
       const shortId = log.identifier
         ? log.identifier.replace('license:', '').substring(0, 12) + '...'
         : '–';
@@ -336,8 +336,8 @@ setInterval(loadAll, 30000);
 </html>]]
 
 local function GetDashboardHtml(apiKey)
-    -- gsub statt string.format um Probleme mit % im HTML zu vermeiden
-    return DASHBOARD_HTML:gsub('__API_KEY__', apiKey)
+  -- gsub statt string.format um Probleme mit % im HTML zu vermeiden
+  return DASHBOARD_HTML:gsub('__API_KEY__', apiKey)
 end
 
 -- ─────────────────────────────────────────────────────────
@@ -345,165 +345,165 @@ end
 -- ─────────────────────────────────────────────────────────
 
 SetHttpHandler(function(req, res)
-    res.writeHead(200, {
-        ['Access-Control-Allow-Origin']  = '*',
-        ['Access-Control-Allow-Headers'] = 'X-Api-Key, Content-Type',
-        ['Access-Control-Allow-Methods'] = 'GET, OPTIONS',
+  res.writeHead(200, {
+    ['Access-Control-Allow-Origin']  = '*',
+    ['Access-Control-Allow-Headers'] = 'X-Api-Key, Content-Type',
+    ['Access-Control-Allow-Methods'] = 'GET, OPTIONS',
+  })
+
+  if req.method == 'OPTIONS' then
+    res.send(''); return
+  end
+  if req.method ~= 'GET' then
+    JsonResponse(res, 405, { error = 'Method Not Allowed' })
+    return
+  end
+
+  local path, query = ParseRequest(req.path or '/')
+
+  -- Dashboard braucht keinen API-Key
+  if path == '/prop_placement/dashboard' or path == '/dashboard' then
+    HtmlResponse(res, GetDashboardHtml(Config.Logging.ApiKey))
+    return
+  end
+
+  if not CheckApiKey(req, query) then
+    JsonResponse(res, 401, { error = 'Unauthorized - invalid or missing API key' })
+    return
+  end
+
+  -- ── Health ──────────────────────────────────────────
+  if path == '/prop_placement/health' or path == '/health' then
+    JsonResponse(res, 200, {
+      status    = 'ok',
+      resource  = GetCurrentResourceName(),
+      uptime    = GetGameTimer() / 1000,
+      timestamp = os.time(),
     })
+    return
+  end
 
-    if req.method == 'OPTIONS' then
-        res.send(''); return
-    end
-    if req.method ~= 'GET' then
-        JsonResponse(res, 405, { error = 'Method Not Allowed' })
-        return
-    end
-
-    local path, query = ParseRequest(req.path or '/')
-
-    -- Dashboard braucht keinen API-Key
-    if path == '/prop_placement/dashboard' or path == '/dashboard' then
-        HtmlResponse(res, GetDashboardHtml(Config.Logging.ApiKey))
-        return
-    end
-
-    if not CheckApiKey(req, query) then
-        JsonResponse(res, 401, { error = 'Unauthorized - invalid or missing API key' })
-        return
-    end
-
-    -- ── Health ──────────────────────────────────────────
-    if path == '/prop_placement/health' or path == '/health' then
-        JsonResponse(res, 200, {
-            status    = 'ok',
-            resource  = GetCurrentResourceName(),
-            uptime    = GetGameTimer() / 1000,
-            timestamp = os.time(),
-        })
-        return
-    end
-
-    -- ── Stats ───────────────────────────────────────────
-    if path == '/prop_placement/stats' or path == '/stats' then
-        local total      = MySQL.query.await('SELECT COUNT(*) as c FROM prop_placement_logs')
-        local byAction   = MySQL.query.await('SELECT action, COUNT(*) as count FROM prop_placement_logs GROUP BY action')
-        local topItems   = MySQL.query.await([[
+  -- ── Stats ───────────────────────────────────────────
+  if path == '/prop_placement/stats' or path == '/stats' then
+    local total      = MySQL.query.await('SELECT COUNT(*) as c FROM prop_placement_logs')
+    local byAction   = MySQL.query.await('SELECT action, COUNT(*) as count FROM prop_placement_logs GROUP BY action')
+    local topItems   = MySQL.query.await([[
             SELECT item_name, COUNT(*) as count FROM prop_placement_logs
             WHERE action = 'place' AND item_name IS NOT NULL
             GROUP BY item_name ORDER BY count DESC LIMIT 10
         ]])
-        local topPlacers = MySQL.query.await([[
+    local topPlacers = MySQL.query.await([[
             SELECT player_name, identifier, COUNT(*) as count FROM prop_placement_logs
             WHERE action = 'place' GROUP BY identifier ORDER BY count DESC LIMIT 10
         ]])
-        local recentDay  = MySQL.query.await([[
+    local recentDay  = MySQL.query.await([[
             SELECT COUNT(*) as c FROM prop_placement_logs
             WHERE created_at >= (NOW() - INTERVAL 24 HOUR)
         ]])
 
-        JsonResponse(res, 200, {
-            total_logs   = total and total[1] and total[1].c or 0,
-            last_24h     = recentDay and recentDay[1] and recentDay[1].c or 0,
-            by_action    = byAction or {},
-            top_items    = topItems or {},
-            top_placers  = topPlacers or {},
-            generated_at = os.time(),
-        })
-        return
-    end
-
-    -- ── Logs ────────────────────────────────────────────
-    if path == '/prop_placement/logs' or path == '/logs' then
-        local page       = math.max(1, tonumber(query.page) or 1)
-        local pageSize   = Config.Logging.PageSize
-        local offset     = (page - 1) * pageSize
-
-        local conditions = {}
-        local params     = {}
-
-        if query.action and query.action ~= '' then
-            table.insert(conditions, 'action = ?')
-            table.insert(params, query.action)
-        end
-        if query.item and query.item ~= '' then
-            table.insert(conditions, 'item_name = ?')
-            table.insert(params, query.item)
-        end
-        if query.identifier and query.identifier ~= '' then
-            table.insert(conditions, 'identifier = ?')
-            table.insert(params, query.identifier)
-        end
-        if query.player and query.player ~= '' then
-            table.insert(conditions, 'player_name LIKE ?')
-            table.insert(params, '%' .. query.player .. '%')
-        end
-        if query.from and query.from ~= '' then
-            table.insert(conditions, 'created_at >= ?')
-            table.insert(params, query.from)
-        end
-        if query.to and query.to ~= '' then
-            table.insert(conditions, 'created_at <= ?')
-            table.insert(params, query.to)
-        end
-
-        local where = #conditions > 0 and ('WHERE ' .. table.concat(conditions, ' AND ')) or ''
-
-        local countParams = {}
-        for _, v in ipairs(params) do table.insert(countParams, v) end
-        local countResult = MySQL.query.await(
-            'SELECT COUNT(*) as total FROM prop_placement_logs ' .. where, countParams)
-        local total = countResult and countResult[1] and countResult[1].total or 0
-
-        local dataParams = {}
-        for _, v in ipairs(params) do table.insert(dataParams, v) end
-        table.insert(dataParams, pageSize)
-        table.insert(dataParams, offset)
-
-        local logs = MySQL.query.await(
-            'SELECT * FROM prop_placement_logs ' .. where ..
-            ' ORDER BY created_at DESC LIMIT ? OFFSET ?',
-            dataParams
-        ) or {}
-
-        for _, entry in ipairs(logs) do
-            if entry.coords then
-                local ok, decoded = pcall(json.decode, entry.coords)
-                entry.coords = ok and decoded or entry.coords
-            end
-            if entry.extra then
-                local ok, decoded = pcall(json.decode, entry.extra)
-                entry.extra = ok and decoded or entry.extra
-            end
-        end
-
-        JsonResponse(res, 200, {
-            data         = logs,
-            pagination   = {
-                page        = page,
-                page_size   = pageSize,
-                total       = total,
-                total_pages = math.ceil(total / pageSize),
-            },
-            filters      = {
-                action     = query.action or nil,
-                item       = query.item or nil,
-                identifier = query.identifier or nil,
-                player     = query.player or nil,
-            },
-            generated_at = os.time(),
-        })
-        return
-    end
-
-    JsonResponse(res, 404, {
-        error     = 'Not Found',
-        available = {
-            '/prop_placement/dashboard',
-            '/prop_placement/health',
-            '/prop_placement/logs',
-            '/prop_placement/stats',
-        }
+    JsonResponse(res, 200, {
+      total_logs   = total and total[1] and total[1].c or 0,
+      last_24h     = recentDay and recentDay[1] and recentDay[1].c or 0,
+      by_action    = byAction or {},
+      top_items    = topItems or {},
+      top_placers  = topPlacers or {},
+      generated_at = os.time(),
     })
+    return
+  end
+
+  -- ── Logs ────────────────────────────────────────────
+  if path == '/prop_placement/logs' or path == '/logs' then
+    local page       = math.max(1, tonumber(query.page) or 1)
+    local pageSize   = Config.Logging.PageSize
+    local offset     = (page - 1) * pageSize
+
+    local conditions = {}
+    local params     = {}
+
+    if query.action and query.action ~= '' then
+      table.insert(conditions, 'action = ?')
+      table.insert(params, query.action)
+    end
+    if query.item and query.item ~= '' then
+      table.insert(conditions, 'item_name = ?')
+      table.insert(params, query.item)
+    end
+    if query.identifier and query.identifier ~= '' then
+      table.insert(conditions, 'identifier = ?')
+      table.insert(params, query.identifier)
+    end
+    if query.player and query.player ~= '' then
+      table.insert(conditions, 'player_name LIKE ?')
+      table.insert(params, '%' .. query.player .. '%')
+    end
+    if query.from and query.from ~= '' then
+      table.insert(conditions, 'created_at >= ?')
+      table.insert(params, query.from)
+    end
+    if query.to and query.to ~= '' then
+      table.insert(conditions, 'created_at <= ?')
+      table.insert(params, query.to)
+    end
+
+    local where = #conditions > 0 and ('WHERE ' .. table.concat(conditions, ' AND ')) or ''
+
+    local countParams = {}
+    for _, v in ipairs(params) do table.insert(countParams, v) end
+    local countResult = MySQL.query.await(
+      'SELECT COUNT(*) as total FROM prop_placement_logs ' .. where, countParams)
+    local total = countResult and countResult[1] and countResult[1].total or 0
+
+    local dataParams = {}
+    for _, v in ipairs(params) do table.insert(dataParams, v) end
+    table.insert(dataParams, pageSize)
+    table.insert(dataParams, offset)
+
+    local logs = MySQL.query.await(
+      'SELECT * FROM prop_placement_logs ' .. where ..
+      ' ORDER BY created_at DESC LIMIT ? OFFSET ?',
+      dataParams
+    ) or {}
+
+    for _, entry in ipairs(logs) do
+      if entry.coords then
+        local ok, decoded = pcall(json.decode, entry.coords)
+        entry.coords = ok and decoded or entry.coords
+      end
+      if entry.extra then
+        local ok, decoded = pcall(json.decode, entry.extra)
+        entry.extra = ok and decoded or entry.extra
+      end
+    end
+
+    JsonResponse(res, 200, {
+      data         = logs,
+      pagination   = {
+        page        = page,
+        page_size   = pageSize,
+        total       = total,
+        total_pages = math.ceil(total / pageSize),
+      },
+      filters      = {
+        action     = query.action or nil,
+        item       = query.item or nil,
+        identifier = query.identifier or nil,
+        player     = query.player or nil,
+      },
+      generated_at = os.time(),
+    })
+    return
+  end
+
+  JsonResponse(res, 404, {
+    error     = 'Not Found',
+    available = {
+      '/prop_placement/dashboard',
+      '/prop_placement/health',
+      '/prop_placement/logs',
+      '/prop_placement/stats',
+    }
+  })
 end)
 
 print('[prop_placement] HTTP API aktiv')

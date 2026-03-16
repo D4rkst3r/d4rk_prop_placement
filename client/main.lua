@@ -397,124 +397,119 @@ end)
 -- Admin-Menü mit Kategorien
 -- ─────────────────────────────────────────────────────────
 
-RegisterNetEvent('prop_placement:openAdminMenu', function(propList)
+RegisterNetEvent('prop_placement:openAdminMenu', function()
+    -- Kategorien sammeln und sortieren
+    local categories = {}
+    local catItems   = {} -- [category] = { {itemName, cfg}, ... }
+
+    for itemName, cfg in pairs(Config.Props) do
+        local cat = cfg.category or 'Sonstiges'
+        if not catItems[cat] then
+            catItems[cat] = {}
+            table.insert(categories, cat)
+        end
+        table.insert(catItems[cat], { itemName = itemName, cfg = cfg })
+    end
+    table.sort(categories)
+
     local options = {}
 
-    -- ── Props-Liste mit Teleport ──────────────────────────
-    if propList and #propList > 0 then
-        for _, prop in ipairs(propList) do
-            local cfg      = Config.Props[prop.itemName]
-            local label    = cfg and cfg.label or prop.itemName
-            local coordStr = ('%.4f, %.4f, %.4f'):format(prop.x, prop.y, prop.z)
+    -- Kategorien als Untermenüs
+    for _, cat in ipairs(categories) do
+        local items    = catItems[cat]
+        local catName  = cat
+        local catCount = #items
 
-            table.insert(options, {
-                title       = '📍 ' .. label .. ' #' .. prop.id,
-                description = coordStr .. '\nBesitzer: ' .. (prop.ownerIdentifier or '?'),
-                metadata    = {
-                    { label = 'X',        value = ('%.4f'):format(prop.x) },
-                    { label = 'Y',        value = ('%.4f'):format(prop.y) },
-                    { label = 'Z',        value = ('%.4f'):format(prop.z) },
-                    { label = 'Rotation', value = ('%.2f'):format(prop.rotation) },
-                    { label = 'Item',     value = prop.itemName },
-                },
-                onSelect    = function()
-                    local ped = PlayerPedId()
-                    local x, y, z = prop.x, prop.y, prop.z
-
-                    -- Welt am Zielort vorladen
-                    lib.notify({
-                        title       = 'Teleportiere...',
-                        description = 'Welt wird geladen...',
-                        type        = 'inform',
-                        duration    = 3000,
-                    })
-
-                    CreateThread(function()
-                        -- Spieler einfrieren damit er nicht wegläuft
-                        FreezeEntityPosition(ped, true)
-
-                        -- Szene am Zielort laden
-                        RequestCollisionAtCoord(x, y, z)
-                        LoadScene(x, y, z)
-
-                        -- Warten bis Kollision geladen
-                        local timeout = 0
-                        while not HasCollisionLoadedAroundEntity(ped) and timeout < 100 do
-                            Wait(100)
-                            timeout = timeout + 1
-                        end
-
-                        -- Erst jetzt teleportieren
-                        SetEntityCoords(ped, x, y, z + 1.0, false, false, false, true)
-
-                        -- Nochmal kurz warten bis Welt vollständig gestreamt
-                        Wait(1000)
-
-                        FreezeEntityPosition(ped, false)
-
-                        lib.notify({
-                            title       = 'Teleportiert ✅',
-                            description = ('Zu Prop #%d (%s)'):format(prop.id, label),
-                            type        = 'success',
-                            duration    = 3000,
-                        })
-                    end)
-                end,
-            })
-        end
-    else
-        table.insert(options, {
-            title       = 'Keine Props platziert',
-            description = 'Es gibt aktuell keine platzierten Props.',
-        })
-    end
-
-    -- ── Trennlinie ────────────────────────────────────────
-    table.insert(options, {
-        title = '─────────────────────',
-    })
-
-    -- ── Items geben (bestehende Logik) ────────────────────
-    local sortedItems = {}
-    for itemName, cfg in pairs(Config.Props) do
-        table.insert(sortedItems, { itemName = itemName, cfg = cfg })
-    end
-    table.sort(sortedItems, function(a, b) return a.cfg.label < b.cfg.label end)
-
-    for _, entry in ipairs(sortedItems) do
-        local itemName = entry.itemName
-        local cfg      = entry.cfg
-        local jobStr   = cfg.jobs and table.concat(cfg.jobs, ', ') or 'Alle'
-        local flags    = (cfg.adminOnly and '🔒 ' or '') .. (cfg.persistent and '💾 ' or '')
+        -- Items in der Kategorie sortieren
+        table.sort(items, function(a, b) return a.cfg.label < b.cfg.label end)
 
         table.insert(options, {
-            title       = flags .. cfg.label,
-            description = ('Model: %s\nJobs: %s'):format(cfg.model, jobStr),
+            title       = ('📦 %s (%d)'):format(catName, catCount),
+            description = 'Kategorie öffnen',
+            arrow       = true,
             onSelect    = function()
-                local input = lib.inputDialog('Prop-Item geben', {
-                    { type = 'number', label = 'Server-ID des Spielers', required = true, min = 1 },
-                    { type = 'number', label = 'Anzahl',                 default = 1,     min = 1, max = 99 },
-                })
-                if input and input[1] then
-                    TriggerServerEvent('prop_placement:adminGive',
-                        tonumber(input[1]), itemName, tonumber(input[2]) or 1)
+                local subOptions = {}
+
+                for _, entry in ipairs(items) do
+                    local itemName = entry.itemName
+                    local cfg      = entry.cfg
+                    local flags    = (cfg.adminOnly and '🔒 ' or '') .. (cfg.persistent and '💾 ' or '')
+
+                    table.insert(subOptions, {
+                        title       = flags .. cfg.label,
+                        description = ('Model: %s | %sg'):format(cfg.model, cfg.weight or 1000),
+                        onSelect    = function()
+                            local input = lib.inputDialog('Prop-Item geben', {
+                                { type = 'number', label = 'Server-ID des Spielers', required = true, min = 1 },
+                                { type = 'number', label = 'Anzahl',                 default = 1,     min = 1, max = 99 },
+                            })
+                            if input and input[1] then
+                                TriggerServerEvent('prop_placement:adminGive',
+                                    tonumber(input[1]), itemName, tonumber(input[2]) or 1)
+                            end
+                        end,
+                    })
                 end
+
+                lib.registerContext({
+                    id      = 'pp_cat_' .. catName,
+                    title   = ('🧱 %s'):format(catName),
+                    menu    = 'prop_placement_admin_menu',
+                    options = subOptions,
+                })
+                lib.showContext('pp_cat_' .. catName)
             end,
         })
     end
 
-    -- ── Alle Props löschen ────────────────────────────────
+    table.insert(options, { title = '─────────────────', disabled = true })
+
     table.insert(options, {
-        title       = '🗑 Alle Props löschen',
-        description = 'Entfernt ALLE platzierten Props (DB + Clients)',
+        title       = '📋 Alle Props anzeigen',
+        description = 'Liste aller platzierten Props',
+        onSelect    = function()
+            TriggerServerEvent('prop_placement:requestPropList', nil)
+        end,
+    })
+
+    table.insert(options, {
+        title       = '🔍 Props nach Spieler filtern',
+        description = 'Props eines bestimmten Spielers anzeigen',
+        onSelect    = function()
+            local input = lib.inputDialog('Spieler filtern', {
+                { type = 'text', label = 'License-Identifier (license:...)', required = true },
+            })
+            if input and input[1] and input[1] ~= '' then
+                TriggerServerEvent('prop_placement:requestPropList', input[1])
+            end
+        end,
+    })
+
+    table.insert(options, {
+        title       = '🗑 Props eines Spielers löschen',
+        description = 'Alle Props eines bestimmten Spielers entfernen',
+        onSelect    = function()
+            local input = lib.inputDialog('Spieler-Props löschen', {
+                { type = 'text', label = 'License-Identifier (license:...)', required = true },
+            })
+            if input and input[1] and input[1] ~= '' then
+                TriggerServerEvent('prop_placement:adminClearPlayer', input[1])
+            end
+        end,
+    })
+
+    table.insert(options, {
+        title       = '💥 Alle Props löschen',
+        description = 'Entfernt ALLE platzierten Props',
         metadata    = { { label = 'Achtung', value = 'Kann nicht rückgängig gemacht werden!' } },
         onSelect    = function()
-            lib.alertDialog({
-                header   = 'Alle Props löschen?',
-                content  = 'Diese Aktion löscht alle Props dauerhaft aus der Datenbank.',
-                centered = true,
-                cancel   = true,
-            }):next(function(confirmed)
+            CreateThread(function()
+                local confirmed = lib.alertDialog({
+                    header   = 'Alle Props löschen?',
+                    content  = 'Diese Aktion löscht alle Props dauerhaft.',
+                    centered = true,
+                    cancel   = true,
+                })
                 if confirmed == 'confirm' then
                     TriggerServerEvent('prop_placement:adminClearAll')
                 end
