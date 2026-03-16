@@ -53,7 +53,7 @@ Config.Preloading = {
 
 -- ─── Snap-to-Grid ─────────────────────────────────────
 Config.SnapToGrid = {
-    Enabled  = false,
+    Enabled  = true,
     GridSize = 0.5,
 }
 

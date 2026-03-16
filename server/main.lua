@@ -7,7 +7,7 @@
 
 local placedProps = {}
 local nextId      = 1
-local cooldowns   = {}  -- [identifier] = last placement timestamp
+local cooldowns   = {} -- [identifier] = last placement timestamp
 
 -- ─────────────────────────────────────────────────────────
 -- Hilfsfunktionen
@@ -258,8 +258,12 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
     local success = exports.ox_inventory:RemoveItem(src, itemName, 1)
     if not success then
         lib.notify(src,
-            { title = 'Item nicht gefunden', description = 'Das Item wurde nicht in deinem Inventar gefunden.', type =
-            'error' })
+            {
+                title = 'Item nicht gefunden',
+                description = 'Das Item wurde nicht in deinem Inventar gefunden.',
+                type =
+                'error'
+            })
         return
     end
 
@@ -335,8 +339,12 @@ RegisterNetEvent('prop_placement:remove', function(propId)
 
     if not admin and not isOwner and ownerOnly then
         lib.notify(src,
-            { title = 'Keine Berechtigung', description = 'Nur der Besitzer oder ein Admin kann diesen Prop entfernen.', type =
-            'error' })
+            {
+                title = 'Keine Berechtigung',
+                description = 'Nur der Besitzer oder ein Admin kann diesen Prop entfernen.',
+                type =
+                'error'
+            })
         return
     end
 
@@ -391,11 +399,19 @@ RegisterNetEvent('prop_placement:adminGive', function(targetId, itemName, amount
     exports.ox_inventory:AddItem(targetId, itemName, amount)
 
     lib.notify(src,
-        { title = 'Item gegeben', description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId), type =
-        'success' })
+        {
+            title = 'Item gegeben',
+            description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId),
+            type =
+            'success'
+        })
     lib.notify(targetId,
-        { title = 'Item erhalten', description = ('Du hast %dx %s erhalten.'):format(amount, propConfig.label), type =
-        'success' })
+        {
+            title = 'Item erhalten',
+            description = ('Du hast %dx %s erhalten.'):format(amount, propConfig.label),
+            type =
+            'success'
+        })
 
     LogPropAction('admin_give', src, GetIdentifier(src), GetPlayerName(src) or 'Unbekannt',
         nil, itemName, nil, nil,
@@ -488,7 +504,7 @@ end)
 RegisterNetEvent('prop_placement:requestAdminMenu', function()
     local src = source
     if IsAdmin(src) then
-        TriggerClientEvent('prop_placement:openAdminMenu', src)
+        TriggerClientEvent('prop_placement:openAdminMenu', src, GetPropList())
     else
         lib.notify(src,
             { title = 'Keine Berechtigung', description = 'Das Admin-Menü ist nur für Admins zugänglich.', type = 'error' })
@@ -554,8 +570,12 @@ RegisterCommand('giveprop', function(src, args)
     local label = Config.Props[itemName].label
     if src ~= 0 then
         lib.notify(src,
-            { title = 'Item erhalten ✅', description = ('%dx %s ins Inventar gelegt.'):format(amount, label), type =
-            'success' })
+            {
+                title = 'Item erhalten ✅',
+                description = ('%dx %s ins Inventar gelegt.'):format(amount, label),
+                type =
+                'success'
+            })
     else
         print(('[prop_placement] %dx %s → Spieler %d gegeben.'):format(amount, label, target))
     end
