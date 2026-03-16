@@ -9,7 +9,8 @@
 local placedProps = {}
 local allPropData = {}
 local propGrid    = {}
-local isSyncing   = false   -- Guard gegen gleichzeitige syncAll-Aufrufe
+local isSyncing   = false -- Guard gegen gleichzeitige syncAll-Aufrufe
+local syncToken   = 0     -- Einfache Token-Logik um veraltete syncAll-Threads zu erkennen (siehe weiter unten)
 
 -- ─────────────────────────────────────────────────────────
 -- Hilfsfunktionen
@@ -156,24 +157,15 @@ local function SpawnProp(propData)
 
     local entity = CreateObject(model, propData.x, propData.y, propData.z, false, false, false)
 
-    -- Sicherstellen dass Entity wirklich existiert bevor Properties gesetzt werden
-    if not DoesEntityExist(entity) then
-        DebugLog('Entity konnte nicht erstellt werden: #' .. propId)
-        SetModelAsNoLongerNeeded(model)
-        return
-    end
-
-    -- Erst als Mission Entity markieren damit GTA es nicht garbage-collected
     SetEntityAsMissionEntity(entity, true, true)
-
     SetEntityRotation(entity, 0.0, 0.0, propData.rotation, 2, true)
     FreezeEntityPosition(entity, true)
     SetEntityCollision(entity, true, true)
     SetEntityInvincible(entity, true)
     SetEntityCanBeDamaged(entity, false)
     SetEntityAlpha(entity, 255, false)
-    -- ENTFERNT: NetworkSetEntityInvisibleToNetwork – nur für vernetzte Entities sinnvoll,
-    -- bei lokalen Objekten (isNetwork=false) kann es Probleme verursachen
+    NetworkSetEntityInvisibleToNetwork(entity, false) -- ← wieder rein
+    SetEntityLodDist(entity, 1000)                    -- ← neu dazu
 
     placedProps[propId] = entity
     allPropData[propId] = propData
@@ -213,7 +205,7 @@ local function ClearAllLocalProps()
     placedProps = {}
     allPropData = {}
     propGrid    = {}
-    isSyncing   = false     -- Guard zurücksetzen
+    -- isSyncing hier NICHT zurücksetzen!
 end
 
 -- ─────────────────────────────────────────────────────────
@@ -289,28 +281,12 @@ end)
 -- ─────────────────────────────────────────────────────────
 
 RegisterNetEvent('prop_placement:syncAll', function(propList)
-    -- Guard: verhindert dass zwei syncAll gleichzeitig laufen
-    -- (passiert wenn playerSpawned mehrfach feuert)
-    if isSyncing then
-        DebugLog('syncAll ignoriert – läuft bereits')
-        return
-    end
-    isSyncing = true
-
     ClearAllLocalProps()
 
     CreateThread(function()
-        local ped    = PlayerPedId()
-        local waited = 0
-        repeat
-            Wait(500)
-            waited = waited + 500
-            ped = PlayerPedId()
-        until HasCollisionLoadedAroundEntity(ped) or waited >= 8000
+        local playerPos = GetEntityCoords(PlayerPedId())
 
-        local playerPos = GetEntityCoords(ped)
-
-        -- Bestehende Welt-Objekte an diesen Positionen entfernen
+        -- Doppelte bestehende Welt-Objekte entfernen
         for _, propData in ipairs(propList) do
             local model    = GetHashKey(propData.model)
             local existing = GetClosestObjectOfType(
@@ -323,7 +299,6 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
             end
         end
 
-        -- Grid und allPropData aufbauen
         for _, propData in ipairs(propList) do
             allPropData[propData.id] = propData
             if Config.Grid.Enabled then
@@ -331,7 +306,6 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
             end
         end
 
-        -- Props in Reichweite spawnen
         for _, propData in ipairs(propList) do
             local dist = #(playerPos - vector3(propData.x, propData.y, propData.z))
             if not Config.Streaming.Enabled or dist <= Config.Streaming.SpawnRadius then
@@ -339,9 +313,6 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
                 Wait(30)
             end
         end
-
-        isSyncing = false
-        streamStillFrames = 0
     end)
 
     DebugLog(('Sync: %d Props empfangen'):format(#propList))
@@ -563,31 +534,17 @@ end)
 -- Initialisierung
 -- ─────────────────────────────────────────────────────────
 
-AddEventHandler('onClientResourceStart', function(resourceName)
-    if resourceName ~= GetCurrentResourceName() then return end
-    Wait(1000)
-    TriggerServerEvent('prop_placement:requestSync')
-end)
 
 AddEventHandler('playerSpawned', function()
-    -- FIX: Nicht sofort synchen – erst warten bis die Welt
-    -- um den Spieler vollständig geladen ist (Kollision, Streaming).
-    -- Ohne diesen Wait erstellt GTA Objekte und löscht sie sofort wieder
-    -- weil die Chunks noch nicht gestreamt sind.
     CreateThread(function()
-        local ped = PlayerPedId()
-
-        -- Warten bis Kollision geladen ist (max 10s)
+        local ped    = PlayerPedId()
         local waited = 0
         repeat
             Wait(500)
             waited = waited + 500
             ped = PlayerPedId()
         until HasCollisionLoadedAroundEntity(ped) or waited >= 10000
-
-        -- Nochmal 500ms extra Puffer
         Wait(500)
-
         TriggerServerEvent('prop_placement:requestSync')
     end)
 end)
