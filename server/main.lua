@@ -10,6 +10,8 @@ local placedProps     = {}
 local nextId          = 1
 local cooldowns       = {}
 local playerPropCount = {}
+local dbReady         = false
+local syncQueue       = {} -- Clients die vor DB-Load requestSync geschickt haben
 
 local function DebugLog(msg)
     if Config.Debug then print('[prop_placement][SERVER] ' .. tostring(msg)) end
@@ -102,48 +104,58 @@ CreateThread(function()
             local id        = row.id
             local owner     = row.owner_identifier
             placedProps[id] = {
-                id = id,
-                itemName = row.item_name,
-                model = row.model,
-                x = row.x,
-                y = row.y,
-                z = row.z,
-                rotation = row.rotation,
+                id              = id,
+                itemName        = row.item_name,
+                model           = row.model,
+                x               = row.x,
+                y               = row.y,
+                z               = row.z,
+                rotation        = row.rotation,
                 ownerIdentifier = owner,
-                ownerJob = nil,
-                persistent = true,
+                ownerJob        = nil,
+                persistent      = true,
             }
             if owner then playerPropCount[owner] = (playerPropCount[owner] or 0) + 1 end
             if id >= nextId then nextId = id + 1 end
         end
         print(('[prop_placement] %d persistente Props aus Datenbank geladen.'):format(#result))
-
-        -- d4rk_livemap Integration: bestehende Props als Marker laden
-        -- Wait(2000) damit d4rk_livemap garantiert bereit ist
-        CreateThread(function()
-            Wait(2000)
-            local colorMap = { Allgemein = '#60a5fa', Polizei = '#f87171', Baustelle = '#fbbf24', Admin = '#c084fc' }
-            local loaded   = 0
-            for id, prop in pairs(placedProps) do
-                pcall(function()
-                    local cfg = Config.Props[prop.itemName]
-                    exports.d4rk_livemap:AddMarker({
-                        id     = 'prop_' .. id,
-                        x      = prop.x,
-                        y      = prop.y,
-                        z      = prop.z,
-                        label  = (cfg and cfg.label or prop.itemName) .. ' #' .. id,
-                        color  = colorMap[(cfg and cfg.category)] or '#00d4aa',
-                        icon   = 'box',
-                        group  = (cfg and cfg.category) or 'Props',
-                        source = 'prop_placement',
-                    })
-                    loaded = loaded + 1
-                end)
-            end
-            print(('[prop_placement] %d Props an d4rk_livemap übermittelt.'):format(loaded))
-        end)
     end
+
+    -- DB ist jetzt bereit
+    dbReady = true
+    DebugLog(('DB bereit – %d Clients in Queue werden jetzt synchronisiert'):format(#syncQueue))
+
+    -- Alle Clients die schon requestSync geschickt haben jetzt versorgen
+    local list = GetPropList()
+    for _, src in ipairs(syncQueue) do
+        TriggerClientEvent('prop_placement:syncAll', src, list)
+    end
+    syncQueue = {}
+
+    -- d4rk_livemap Integration: bestehende Props als Marker laden
+    CreateThread(function()
+        Wait(2000)
+        local colorMap = { Allgemein = '#60a5fa', Polizei = '#f87171', Baustelle = '#fbbf24', Admin = '#c084fc' }
+        local loaded   = 0
+        for id, prop in pairs(placedProps) do
+            pcall(function()
+                local cfg = Config.Props[prop.itemName]
+                exports.d4rk_livemap:AddMarker({
+                    id     = 'prop_' .. id,
+                    x      = prop.x,
+                    y      = prop.y,
+                    z      = prop.z,
+                    label  = (cfg and cfg.label or prop.itemName) .. ' #' .. id,
+                    color  = colorMap[(cfg and cfg.category)] or '#00d4aa',
+                    icon   = 'box',
+                    group  = (cfg and cfg.category) or 'Props',
+                    source = 'prop_placement',
+                })
+                loaded = loaded + 1
+            end)
+        end
+        print(('[prop_placement] %d Props an d4rk_livemap übermittelt.'):format(loaded))
+    end)
 end)
 
 -- ─────────────────────────────────────────────────────────
@@ -157,11 +169,11 @@ CreateThread(function()
         local items = {}
         for itemName, cfg in pairs(Config.Props) do
             items[itemName] = {
-                label = cfg.label,
+                label  = cfg.label,
                 weight = cfg.weight or 1000,
-                stack = true,
-                close = true,
-                image = ('nui://%s/web/images/%s.png'):format(resourceName, itemName),
+                stack  = true,
+                close  = true,
+                image  = ('nui://%s/web/images/%s.png'):format(resourceName, itemName),
             }
         end
         exports.ox_inventory:Items(items)
@@ -194,9 +206,14 @@ AddEventHandler('playerDropped', function()
 end)
 
 RegisterNetEvent('prop_placement:requestSync', function()
-    local src  = source
-    local list = GetPropList() -- ALLE Props senden
-    TriggerClientEvent('prop_placement:syncAll', src, list)
+    local src = source
+    if not dbReady then
+        -- DB noch nicht fertig → Client in Queue eintragen
+        table.insert(syncQueue, src)
+        DebugLog('requestSync von ' .. src .. ' in Queue – DB noch nicht bereit')
+        return
+    end
+    TriggerClientEvent('prop_placement:syncAll', src, GetPropList())
 end)
 
 RegisterNetEvent('prop_placement:place', function(itemName, posData)
@@ -217,13 +234,11 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
     if Config.MaxPropsPerPlayer > 0 and not IsAdmin(src) then
         local current = CountPlayerProps(identifier)
         if current >= Config.MaxPropsPerPlayer then
-            lib.notify(src,
-                {
-                    title = 'Limit erreicht',
-                    description = ('%d/%d Props.'):format(current, Config.MaxPropsPerPlayer),
-                    type =
-                    'warning'
-                }); return
+            lib.notify(src, {
+                title       = 'Limit erreicht',
+                description = ('%d/%d Props.'):format(current, Config.MaxPropsPerPlayer),
+                type        = 'warning',
+            }); return
         end
     end
 
@@ -244,16 +259,16 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
     SetCooldown(identifier)
     local propId        = nextId; nextId = nextId + 1
     local propData      = {
-        id = propId,
-        itemName = itemName,
-        model = propConfig.model,
-        x = posData.x,
-        y = posData.y,
-        z = posData.z,
-        rotation = posData.rotation or 0.0,
+        id              = propId,
+        itemName        = itemName,
+        model           = propConfig.model,
+        x               = posData.x,
+        y               = posData.y,
+        z               = posData.z,
+        rotation        = posData.rotation or 0.0,
         ownerIdentifier = identifier,
-        ownerJob = nil,
-        persistent = propConfig.persistent,
+        ownerJob        = nil,
+        persistent      = propConfig.persistent,
     }
     placedProps[propId] = propData
     IncrementPlayerProps(identifier)
@@ -312,13 +327,11 @@ RegisterNetEvent('prop_placement:remove', function(propId)
     placedProps[propId] = nil
     MySQL.query('DELETE FROM prop_placement_props WHERE id = ?', { propId })
     TriggerClientEvent('prop_placement:propRemoved', -1, propId)
-    lib.notify(src,
-        {
-            title = 'Entfernt ✅',
-            description = (propConfig and propConfig.label or prop.itemName) .. ' ins Inventar.',
-            type =
-            'success'
-        })
+    lib.notify(src, {
+        title       = 'Entfernt ✅',
+        description = (propConfig and propConfig.label or prop.itemName) .. ' ins Inventar.',
+        type        = 'success',
+    })
     LogPropAction('remove', src, identifier, GetPlayerName(src) or 'Unbekannt', propId, prop.itemName, prop.model,
         { x = prop.x, y = prop.y, z = prop.z, rotation = prop.rotation }, { owner = prop.ownerIdentifier })
 
@@ -333,15 +346,16 @@ RegisterNetEvent('prop_placement:adminGive', function(targetId, itemName, amount
     if not propConfig or not GetPlayerName(targetId) then return end
     amount = math.max(1, math.min(amount or 1, 99))
     exports.ox_inventory:AddItem(targetId, itemName, amount)
-    lib.notify(src,
-        {
-            title = 'Item gegeben',
-            description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId),
-            type =
-            'success'
-        })
-    lib.notify(targetId,
-        { title = 'Item erhalten', description = ('%dx %s erhalten.'):format(amount, propConfig.label), type = 'success' })
+    lib.notify(src, {
+        title       = 'Item gegeben',
+        description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId),
+        type        = 'success',
+    })
+    lib.notify(targetId, {
+        title       = 'Item erhalten',
+        description = ('%dx %s erhalten.'):format(amount, propConfig.label),
+        type        = 'success',
+    })
     LogPropAction('admin_give', src, GetIdentifier(src), GetPlayerName(src) or 'Unbekannt', nil, itemName, nil, nil,
         { target_id = targetId, amount = amount })
 end)
@@ -380,14 +394,14 @@ RegisterNetEvent('prop_placement:requestPropList', function(filterIdentifier)
     for id, prop in pairs(placedProps) do
         if not filterIdentifier or prop.ownerIdentifier == filterIdentifier then
             table.insert(list, {
-                id = id,
-                itemName = prop.itemName,
-                model = prop.model,
-                x = prop.x,
-                y = prop.y,
-                z = prop.z,
+                id              = id,
+                itemName        = prop.itemName,
+                model           = prop.model,
+                x               = prop.x,
+                y               = prop.y,
+                z               = prop.z,
                 ownerIdentifier = prop.ownerIdentifier or 'Unbekannt',
-                persistent = prop.persistent
+                persistent      = prop.persistent,
             })
         end
     end

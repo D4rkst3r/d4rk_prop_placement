@@ -161,9 +161,9 @@ local function SpawnProp(propData)
         return
     end
 
-    SetEntityAsMissionEntity(entity, true, true)
-    SetEntityRotation(entity, 0.0, 0.0, propData.rotation, 2, true)
-    FreezeEntityPosition(entity, true)
+    FreezeEntityPosition(entity, false) -- kurz auftauen damit PlaceOnGround funktioniert
+    PlaceObjectOnGroundProperly(entity) -- auf Boden snappen
+    FreezeEntityPosition(entity, true)  -- wieder einfrieren
     SetEntityCollision(entity, true, true)
     SetEntityInvincible(entity, true)
     SetEntityCanBeDamaged(entity, false)
@@ -171,10 +171,48 @@ local function SpawnProp(propData)
     NetworkSetEntityInvisibleToNetwork(entity, false)
     SetEntityLodDist(entity, 1000)
 
+    local capturedEntity = entity
+    local capturedId     = propId
+    CreateThread(function()
+        Wait(1000)
+        DebugLog(('Prop #%d nach 1s – existiert: %s'):format(
+            capturedId, tostring(DoesEntityExist(capturedEntity))
+        ))
+    end)
+
     placedProps[propId] = entity
     allPropData[propId] = propData
     AddToGrid(propId, propData.x, propData.y)
     RegisterPropTarget(propId, entity, propData)
+    -- VISUAL DEBUG: Marker für 30s an der Prop-Position zeichnen
+    local debugX = propData.x
+    local debugY = propData.y
+    local debugZ = propData.z
+    local debugId = propId
+    CreateThread(function()
+        local timer = 0
+        while timer < 30000 do
+            DrawMarker(1,
+                debugX, debugY, debugZ + 1.0,
+                0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0,
+                0.5, 0.5, 0.5,
+                255, 0, 255, 200, -- pink/magenta = leicht zu finden
+                false, false, 2, nil, nil, false
+            )
+            DrawMarker(28, -- Pfeil nach unten
+                debugX, debugY, debugZ + 3.0,
+                0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0,
+                0.5, 0.5, 0.5,
+                255, 255, 0, 200, -- gelb
+                false, false, 2, nil, nil, false
+            )
+            timer = timer + 0
+            Wait(0)
+        end
+        DebugLog('Visual Debug für Prop #' .. debugId .. ' beendet')
+    end)
     SetModelAsNoLongerNeeded(model)
 
     DebugLog('Prop #' .. propId .. ' gespawnt (' .. propData.model .. ')')

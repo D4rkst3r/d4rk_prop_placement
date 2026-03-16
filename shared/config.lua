@@ -9,7 +9,7 @@ Config = {}
 Config.Debug = true
 
 -- ─── Limits ───────────────────────────────────────────
-Config.MaxPropsPerPlayer = 15
+Config.MaxPropsPerPlayer = 150
 
 -- ─── Placement ────────────────────────────────────────
 Config.Placement = {
