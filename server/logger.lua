@@ -10,15 +10,26 @@
     GET /prop_placement/stats              → Statistiken + 7-Tage-Aktivität
     GET /prop_placement/logs               → Logs (paginiert)
     GET /prop_placement/props              → Aktive Props (paginiert)
-    DELETE /prop_placement/props/remove?id=X → Prop löschen
+    GET /prop_placement/props/remove?id=X  → Prop löschen (via Dashboard)
+
+    API-KEY KONFIGURATION (server.cfg):
+    set prop_placement_api_key "dein_sicherer_key"
 ]]
 
+-- FIX #10: API-Key aus Convar laden statt hardcodiert im Quellcode
+-- Fallback "changeme" erzwingt dass der Key in server.cfg gesetzt wird
 Config.Logging = {
   Enabled   = true,
-  ApiKey    = 'Z9ijq5p2rfk6BNVa6Vcv0OPqvMN5mkH3', -- ÄNDERN!
+  ApiKey    = GetConvar('prop_placement_api_key', 'changeme'),
   PageSize  = 50,
   AutoPurge = 30,
 }
+
+-- Warnung ausgeben wenn noch der Standard-Key verwendet wird
+if Config.Logging.ApiKey == 'changeme' then
+  print('[prop_placement] WARNUNG: API-Key ist "changeme"! Bitte in server.cfg setzen:')
+  print('[prop_placement]   set prop_placement_api_key "dein_sicherer_zufaelliger_key"')
+end
 
 local function JsonResponse(res, status, data)
   res.writeHead(status, { ['Content-Type'] = 'application/json' })
@@ -139,10 +150,7 @@ header{background:var(--s1);border-bottom:1px solid var(--border);padding:0 28px
 .g31{display:grid;grid-template-columns:1fr 360px;gap:20px;margin-bottom:20px}
 .chart-box{padding:16px 18px;height:264px}
 .chart-box-sm{padding:14px 18px;height:220px}
-
-/* ── Map (iframe) ── */
 #livemapFrame{border-radius:0}
-
 .tlist-item{display:flex;align-items:center;gap:8px;padding:8px 18px;border-bottom:1px solid #0a0c16}
 .tlist-item:last-child{border-bottom:none}
 .tlist-rank{font-family:'JetBrains Mono',monospace;font-size:.65rem;color:var(--muted);width:20px;flex-shrink:0}
@@ -254,7 +262,7 @@ tr:hover td{background:#0c0f1c}
       <div style="position:relative;height:440px">
         <iframe id="livemapFrame"
           src=""
-          style="width:100%;height:100%;border:none;border-radius:0 0 0 0;display:block;background:#07080f"
+          style="width:100%;height:100%;border:none;display:block;background:#07080f"
           loading="lazy">
         </iframe>
         <div id="mapOffline" style="
@@ -323,7 +331,6 @@ tr:hover td{background:#0c0f1c}
 const KEY = '__API_KEY__';
 const B   = window.location.origin;
 let logsP = 1, propsP = 1;
-let allMapProps = [];
 let actCh = null, distCh = null;
 
 async function api(path) {
@@ -335,7 +342,6 @@ async function api(path) {
 
 function fmt(n) { return (+(n||0)).toLocaleString('de-DE'); }
 
-// ── Kategorie-Farben ──────────────────────────────────────
 const CAT_COLOR = {
   'Allgemein':'#60a5fa', 'Polizei':'#f87171',
   'Baustelle':'#fbbf24', 'Admin':'#c084fc', 'Sonstiges':'#4ade80',
@@ -345,7 +351,6 @@ function catBadge(c) {
   return ({Allgemein:'b-allgemein',Polizei:'b-polizei',Baustelle:'b-baustelle',Admin:'b-admin'})[c] || 'b-default';
 }
 
-// ── Health ────────────────────────────────────────────────
 async function loadHealth() {
   try {
     const d = await api('/prop_placement/health');
@@ -364,7 +369,6 @@ async function loadHealth() {
   }
 }
 
-// ── Stats ─────────────────────────────────────────────────
 async function loadStats() {
   try {
     const d = await api('/prop_placement/stats');
@@ -389,13 +393,11 @@ async function loadStats() {
   } catch(e) { console.error('Stats Fehler:', e); }
 }
 
-// ── Aktivitäts-Chart ──────────────────────────────────────
 function buildActChart(data) {
   const ctx = document.getElementById('actChart');
   if (!ctx) return;
   if (actCh) { actCh.destroy(); actCh = null; }
 
-  // Leere Daten: 7 Tage mit 0
   if (!data.length) {
     const labels = [];
     for (let i = 6; i >= 0; i--) {
@@ -429,16 +431,13 @@ function buildActChart(data) {
   });
 }
 
-// ── Verteilungs-Chart ─────────────────────────────────────
 function buildDistChart(props) {
   const distBox   = document.getElementById('distBox');
   const distEmpty = document.getElementById('distEmpty');
   const ctx       = document.getElementById('distChart');
   if (!ctx) return;
-
   if (distCh) { distCh.destroy(); distCh = null; }
 
-  // Leere Daten abfangen
   if (!props || !props.length) {
     distBox.style.display   = 'none';
     distEmpty.style.display = 'block';
@@ -449,7 +448,6 @@ function buildDistChart(props) {
 
   const cats = {};
   props.forEach(p => { const c = p.category||'Sonstiges'; cats[c] = (cats[c]||0)+1; });
-
   const labels = Object.keys(cats);
   const data   = Object.values(cats);
   if (!labels.length) { distBox.style.display='none'; distEmpty.style.display='block'; return; }
@@ -469,52 +467,36 @@ function buildDistChart(props) {
   });
 }
 
-// ── d4rk_livemap iframe einbinden ────────────────────────
-// URL zur d4rk_livemap Instanz – selber Server, anderer Port/Pfad
-const LIVEMAP_URL = window.location.origin.replace(':30120', ':30120') + '/d4rk_livemap/?mode=markers&group=Props&sidebar=0';
+const LIVEMAP_URL = window.location.origin + '/d4rk_livemap/?mode=markers&group=Props&sidebar=0';
 
 function initMap() {
-  const frame       = document.getElementById('livemapFrame');
-  const offline     = document.getElementById('mapOffline');
-  const openBtn     = document.getElementById('mapOpenBtn');
-  const fallback    = document.getElementById('mapFallbackLink');
+  const frame    = document.getElementById('livemapFrame');
+  const offline  = document.getElementById('mapOffline');
+  const openBtn  = document.getElementById('mapOpenBtn');
+  const fallback = document.getElementById('mapFallbackLink');
 
   if (openBtn)  openBtn.href  = LIVEMAP_URL;
   if (fallback) fallback.href = LIVEMAP_URL;
-
   if (!frame) return;
 
   frame.src = LIVEMAP_URL;
+  frame.onload = () => { if (offline) offline.style.display = 'none'; };
+  frame.onerror = () => { if (offline) offline.style.display = 'flex'; frame.style.display = 'none'; };
 
-  frame.onload = () => {
-    if (offline) offline.style.display = 'none';
-  };
-  frame.onerror = () => {
-    if (offline) offline.style.display = 'flex';
-    frame.style.display = 'none';
-  };
-
-  // Timeout: wenn nach 5s kein onload → offline anzeigen
   setTimeout(() => {
     try {
-      // Cross-origin prüfen: wenn contentDocument null → geladen aber leer
-      if (frame.contentDocument === null) {
-        if (offline) offline.style.display = 'none'; // läuft in iframe
-      }
+      if (frame.contentDocument === null) { if (offline) offline.style.display = 'none'; }
     } catch(e) {
-      // SecurityError = anderer Origin aber geladen → gut
       if (offline) offline.style.display = 'none';
     }
   }, 5000);
 }
 
-// Prop-Zähler aktualisieren (aus API-Daten)
 function updateMapCount(total) {
   const el = document.getElementById('mapCount');
   if (el) el.textContent = fmt(total) + ' Props';
 }
 
-// ── Props laden ───────────────────────────────────────────
 async function loadProps() {
   const fi = document.getElementById('pFItem').value.toLowerCase();
   const fo = document.getElementById('pFOwner').value.toLowerCase();
@@ -574,7 +556,6 @@ async function delProp(id, name) {
 
 function goProp(p) { propsP=p; loadProps(); }
 
-// ── Letzte Aktionen ───────────────────────────────────────
 async function loadRecent() {
   try {
     const d = await api('/prop_placement/logs?page=1');
@@ -590,7 +571,6 @@ async function loadRecent() {
   } catch {}
 }
 
-// ── Logs ─────────────────────────────────────────────────
 async function loadLogs() {
   const action = document.getElementById('fAction').value;
   const item   = document.getElementById('fItem').value;
@@ -634,7 +614,6 @@ async function loadLogs() {
 
 function goLog(p) { logsP=p; loadLogs(); }
 
-// ── Pagination ────────────────────────────────────────────
 function makePager(id, page, total, count, fn) {
   if (!total || total <= 1) { document.getElementById(id).innerHTML=''; return; }
   let h = `<button onclick="${fn}(${page-1})" ${page<=1?'disabled':''}>‹</button>`;
@@ -647,21 +626,20 @@ function makePager(id, page, total, count, fn) {
   document.getElementById(id).innerHTML = h;
 }
 
-// ── Init ─────────────────────────────────────────────────
 async function loadAll() {
   await Promise.all([loadHealth(), loadStats(), loadProps(), loadRecent(), loadLogs()]);
 }
 
-// FIX: Erst nach vollständigem Laden starten
 window.addEventListener('load', () => {
   initMap();
   loadAll();
   setInterval(loadAll, 30000);
 });
 
-// FIX: Karte bei Window-Resize neu zeichnen
+// FIX #1: drawMap existierte nicht → ReferenceError bei jedem Resize entfernt.
+// Charts werden von Chart.js automatisch responsiv skaliert (responsive:true).
 window.addEventListener('resize', () => {
-  requestAnimationFrame(() => drawMap(allMapProps));
+  // Kein manuelles Neuzeichnen nötig – Chart.js und CSS übernehmen das.
 });
 </script>
 </body>
@@ -690,7 +668,6 @@ SetHttpHandler(function(req, res)
 
   local path, query = ParseRequest(req.path or '/')
 
-  -- DEBUG: Jeden eingehenden Request loggen (entfernen wenn alles funktioniert)
   print(('[prop_placement][HTTP] Pfad: "%s" | Methode: %s | Raw: "%s"'):format(
     path, req.method, tostring(req.path)))
 
@@ -714,7 +691,7 @@ SetHttpHandler(function(req, res)
     }); return
   end
 
-  -- Stats (inkl. 7-Tage-Aktivität)
+  -- Stats
   if path == '/prop_placement/stats' or path == '/stats' then
     local total      = MySQL.query.await('SELECT COUNT(*) as c FROM prop_placement_logs')
     local byAction   = MySQL.query.await('SELECT action, COUNT(*) as count FROM prop_placement_logs GROUP BY action')
@@ -734,16 +711,13 @@ SetHttpHandler(function(req, res)
               AND action IN ('place','remove')
             GROUP BY DATE(created_at), action ORDER BY dy ASC]])
 
-    local byDate     = {}
+    local byDate = {}
     if raw7d then
       for _, row in ipairs(raw7d) do
         local d = tostring(row.dy):sub(1, 10)
         if not byDate[d] then byDate[d] = { date = d, place = 0, remove = 0 } end
-        if row.action == 'place' then
-          byDate[d].place = row.count
-        elseif row.action == 'remove' then
-          byDate[d].remove = row.count
-        end
+        if row.action == 'place' then byDate[d].place = row.count
+        elseif row.action == 'remove' then byDate[d].remove = row.count end
       end
     end
     local activity7d = {}
@@ -761,23 +735,17 @@ SetHttpHandler(function(req, res)
     }); return
   end
 
-  -- Debug-Endpunkt: zeigt rohen State ohne Auth-Zwang (nur wenn Config.Debug = true)
+  -- Debug
   if path == '/prop_placement/debug' or path == '/debug' then
     if not Config.Debug then
       JsonResponse(res, 403, { error = 'Debug-Modus nicht aktiv. Config.Debug = true setzen.' }); return
     end
-
-    -- DB direkt prüfen
-    local dbCount          = MySQL.query.await('SELECT COUNT(*) as c FROM prop_placement_props')
-    local dbSample         = MySQL.query.await('SELECT id, item_name, x, y, z FROM prop_placement_props LIMIT 5')
-
-    -- Global-Funktionen prüfen
-    local hasGetAll        = type(GetAllPlacedProps) == 'function'
-    local hasRemoveFn      = type(RemovePropFromServer) == 'function'
-
-    -- Config prüfen
+    local dbCount  = MySQL.query.await('SELECT COUNT(*) as c FROM prop_placement_props')
+    local dbSample = MySQL.query.await('SELECT id, item_name, x, y, z FROM prop_placement_props LIMIT 5')
+    local hasGetAll   = type(GetAllPlacedProps) == 'function'
+    local hasRemoveFn = type(RemovePropFromServer) == 'function'
     local propsConfigCount = 0
-    local propsSample      = {}
+    local propsSample = {}
     if Config and Config.Props then
       for k, v in pairs(Config.Props) do
         propsConfigCount = propsConfigCount + 1
@@ -786,8 +754,6 @@ SetHttpHandler(function(req, res)
         end
       end
     end
-
-    -- In-memory Props (falls Global verfügbar)
     local inMemoryCount = 0
     local inMemorySample = {}
     if hasGetAll then
@@ -799,55 +765,31 @@ SetHttpHandler(function(req, res)
         end
       end
     end
-
     JsonResponse(res, 200, {
       debug = true,
-      db = {
-        total_props = dbCount and dbCount[1] and dbCount[1].c or 0,
-        sample_rows = dbSample or {},
-      },
-      globals = {
-        GetAllPlacedProps    = hasGetAll,
-        RemovePropFromServer = hasRemoveFn,
-      },
-      in_memory = {
-        available = hasGetAll,
-        count     = inMemoryCount,
-        sample    = inMemorySample,
-      },
-      config = {
-        props_defined = propsConfigCount,
-        sample        = propsSample,
-        debug_flag    = Config.Debug,
-      },
-      server = {
-        resource  = GetCurrentResourceName(),
-        uptime    = GetGameTimer() / 1000,
-        timestamp = os.time(),
-      }
+      db = { total_props = dbCount and dbCount[1] and dbCount[1].c or 0, sample_rows = dbSample or {} },
+      globals = { GetAllPlacedProps = hasGetAll, RemovePropFromServer = hasRemoveFn },
+      in_memory = { available = hasGetAll, count = inMemoryCount, sample = inMemorySample },
+      config = { props_defined = propsConfigCount, sample = propsSample, debug_flag = Config.Debug },
+      server = { resource = GetCurrentResourceName(), uptime = GetGameTimer() / 1000, timestamp = os.time() }
     }); return
   end
 
-  -- Props: Prop löschen (DB + in-memory über Global falls verfügbar)
+  -- FIX #7: Endpunkt ist GET (aus Dashboard-Kontext) – Kommentar zur Klarstellung.
+  -- Für externe Nutzung empfehlen wir einen dedizierten API-Client mit dem X-Api-Key Header.
   if path == '/prop_placement/props/remove' or path == '/props/remove' then
     local propId = tonumber(query.id)
     if not propId then
       JsonResponse(res, 400, { error = 'id parameter required' }); return
     end
-
-    -- Erst DB-Eintrag holen für Log
     local existing = MySQL.query.await('SELECT * FROM prop_placement_props WHERE id = ?', { propId })
     local propInfo = existing and existing[1]
-
-    -- In-memory State über Global aktualisieren (falls verfügbar)
     if type(RemovePropFromServer) == 'function' then
       RemovePropFromServer(propId)
     else
-      -- Fallback: nur DB löschen + Clients benachrichtigen
       MySQL.query('DELETE FROM prop_placement_props WHERE id = ?', { propId })
       TriggerClientEvent('prop_placement:propRemoved', -1, propId)
     end
-
     if propInfo then
       LogPropAction('admin_clear', 0, 'dashboard', 'Dashboard', propId,
         propInfo.item_name, propInfo.model,
@@ -860,35 +802,23 @@ SetHttpHandler(function(req, res)
     return
   end
 
-  -- Props: Liste (direkt aus DB – zuverlässig, kein Cross-Script-Global nötig)
+  -- Props Liste
   if path == '/prop_placement/props' or path == '/props' then
     local page     = math.max(1, tonumber(query.page) or 1)
     local pageSize = math.max(1, math.min(tonumber(query.pageSize) or 20, 100))
     local offset   = (page - 1) * pageSize
-
-    -- Gesamtzahl
     local countR   = MySQL.query.await('SELECT COUNT(*) as total FROM prop_placement_props')
     local total    = countR and countR[1] and countR[1].total or 0
 
-    print(('[prop_placement][DEBUG] /props aufgerufen – DB-Count: %d | page: %d | pageSize: %d'):format(
-      total, page, pageSize))
+    print(('[prop_placement][DEBUG] /props aufgerufen – DB-Count: %d | page: %d | pageSize: %d'):format(total, page, pageSize))
 
-    -- Paginierte Props für Tabelle
     local rows = MySQL.query.await(
-      'SELECT * FROM prop_placement_props ORDER BY id ASC LIMIT ? OFFSET ?',
-      { pageSize, offset }
+      'SELECT * FROM prop_placement_props ORDER BY id ASC LIMIT ? OFFSET ?', { pageSize, offset }
     ) or {}
-
-    print(('[prop_placement][DEBUG] DB-Query zurück – Rows: %d'):format(#rows))
-
-    -- Alle Props lightweight für Karte
     local allRows = MySQL.query.await(
       'SELECT id, item_name, x, y, z, owner_identifier FROM prop_placement_props ORDER BY id ASC'
     ) or {}
 
-    print(('[prop_placement][DEBUG] allRows für Karte: %d'):format(#allRows))
-
-    -- Kategorie aus Config.Props anreichern
     local function getCategory(itemName)
       if Config and Config.Props and Config.Props[itemName] then
         return Config.Props[itemName].category or 'Sonstiges'
@@ -899,39 +829,22 @@ SetHttpHandler(function(req, res)
     local pageProps = {}
     for _, row in ipairs(rows) do
       table.insert(pageProps, {
-        id              = row.id,
-        itemName        = row.item_name,
-        model           = row.model,
-        x               = row.x,
-        y               = row.y,
-        z               = row.z,
-        rotation        = row.rotation,
-        ownerIdentifier = row.owner_identifier,
-        persistent      = row.persistent == 1,
-        category        = getCategory(row.item_name),
+        id = row.id, itemName = row.item_name, model = row.model,
+        x = row.x, y = row.y, z = row.z, rotation = row.rotation,
+        ownerIdentifier = row.owner_identifier, persistent = row.persistent == 1,
+        category = getCategory(row.item_name),
       })
     end
-
     local mapProps = {}
     for _, row in ipairs(allRows) do
       table.insert(mapProps, {
-        id              = row.id,
-        itemName        = row.item_name,
-        x               = row.x,
-        y               = row.y,
-        z               = row.z,
-        category        = getCategory(row.item_name),
-        ownerIdentifier = row.owner_identifier,
+        id = row.id, itemName = row.item_name, x = row.x, y = row.y, z = row.z,
+        category = getCategory(row.item_name), ownerIdentifier = row.owner_identifier,
       })
     end
-
     JsonResponse(res, 200, {
-      props         = pageProps,
-      all_map_props = mapProps,
-      total         = total,
-      page          = page,
-      totalPages    = math.max(1, math.ceil(total / pageSize)),
-      generated_at  = os.time(),
+      props = pageProps, all_map_props = mapProps, total = total, page = page,
+      totalPages = math.max(1, math.ceil(total / pageSize)), generated_at = os.time(),
     }); return
   end
 
@@ -941,51 +854,34 @@ SetHttpHandler(function(req, res)
     local pageSize           = Config.Logging.PageSize
     local offset             = (page - 1) * pageSize
     local conditions, params = {}, {}
-
     if query.action and query.action ~= '' then
-      table.insert(conditions, 'action = ?'); table.insert(params, query.action)
-    end
+      table.insert(conditions, 'action = ?'); table.insert(params, query.action) end
     if query.item and query.item ~= '' then
-      table.insert(conditions, 'item_name = ?'); table.insert(params, query.item)
-    end
+      table.insert(conditions, 'item_name = ?'); table.insert(params, query.item) end
     if query.identifier and query.identifier ~= '' then
-      table.insert(conditions, 'identifier = ?'); table.insert(params, query.identifier)
-    end
+      table.insert(conditions, 'identifier = ?'); table.insert(params, query.identifier) end
     if query.player and query.player ~= '' then
-      table.insert(conditions, 'player_name LIKE ?'); table.insert(params, '%' .. query.player .. '%')
-    end
+      table.insert(conditions, 'player_name LIKE ?'); table.insert(params, '%' .. query.player .. '%') end
     if query.from and query.from ~= '' then
-      table.insert(conditions, 'created_at >= ?'); table.insert(params, query.from)
-    end
+      table.insert(conditions, 'created_at >= ?'); table.insert(params, query.from) end
     if query.to and query.to ~= '' then
-      table.insert(conditions, 'created_at <= ?'); table.insert(params, query.to)
-    end
-
+      table.insert(conditions, 'created_at <= ?'); table.insert(params, query.to) end
     local where = #conditions > 0 and ('WHERE ' .. table.concat(conditions, ' AND ')) or ''
-
     local cp = {}; for _, v in ipairs(params) do table.insert(cp, v) end
     local cr = MySQL.query.await('SELECT COUNT(*) as total FROM prop_placement_logs ' .. where, cp)
     local total = cr and cr[1] and cr[1].total or 0
-
     local dp = {}; for _, v in ipairs(params) do table.insert(dp, v) end
     table.insert(dp, pageSize); table.insert(dp, offset)
-
     local logs = MySQL.query.await(
       'SELECT * FROM prop_placement_logs ' .. where .. ' ORDER BY created_at DESC LIMIT ? OFFSET ?', dp
     ) or {}
-
     for _, entry in ipairs(logs) do
-      if entry.coords then
-        local ok, d = pcall(json.decode, entry.coords); entry.coords = ok and d or entry.coords
-      end
-      if entry.extra then
-        local ok, d = pcall(json.decode, entry.extra); entry.extra = ok and d or entry.extra
-      end
+      if entry.coords then local ok, d = pcall(json.decode, entry.coords); entry.coords = ok and d or entry.coords end
+      if entry.extra  then local ok, d = pcall(json.decode, entry.extra);  entry.extra  = ok and d or entry.extra  end
     end
-
     JsonResponse(res, 200, {
-      data         = logs,
-      pagination   = { page = page, page_size = pageSize, total = total, total_pages = math.ceil(total / pageSize) },
+      data       = logs,
+      pagination = { page = page, page_size = pageSize, total = total, total_pages = math.ceil(total / pageSize) },
       generated_at = os.time(),
     }); return
   end

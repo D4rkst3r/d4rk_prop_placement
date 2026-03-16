@@ -15,6 +15,9 @@ local placedProps       = {}    -- [propId] = entity
 local allPropData       = {}    -- [propId] = propData
 local propGrid          = {}    -- ['cellX:cellY'] = { propId = true, ... }
 local hasSynced         = false
+-- FIX #6: syncInProgress Guard verhindert Race-Condition zwischen
+--         onClientResourceStart und playerSpawned
+local syncInProgress    = false
 local isSyncing         = false -- Guard: verhindert Streaming während syncAll läuft
 local streamStillFrames = 0
 
@@ -144,8 +147,6 @@ local function SpawnProp(propData)
         DebugLog('Modell nicht ladbar: ' .. propData.model); return
     end
 
-    -- Direkt an Zielkoordinaten erstellen – Streaming stellt sicher dass
-    -- der Chunk bereits geladen ist bevor SpawnProp aufgerufen wird.
     local entity = CreateObjectNoOffset(model,
         propData.x, propData.y, propData.z,
         false, false, false)
@@ -238,7 +239,6 @@ if Config.Streaming.Enabled then
                 for propId in pairs(allPropData) do toCheck[propId] = true end
             end
 
-            -- Während syncAll nichts spawnen/despawnen
             if not isSyncing then
                 for propId in pairs(toCheck) do
                     local pd = allPropData[propId]
@@ -322,6 +322,7 @@ RegisterNetEvent('prop_placement:startPlacing', function(itemName)
     StartPropPlacement(itemName, propConfig)
 end)
 
+-- FIX #4: filterName wird jetzt vom Server korrekt mitgesendet und hier angezeigt
 RegisterNetEvent('prop_placement:receivePropList', function(list, filterName)
     if #list == 0 then
         lib.notify({ title = 'Prop-Liste', description = 'Keine Props gefunden.', type = 'inform' }); return
@@ -339,10 +340,10 @@ RegisterNetEvent('prop_placement:receivePropList', function(list, filterName)
             onSelect    = function()
                 CreateThread(function()
                     local confirmed = lib.alertDialog({
-                        header = 'Prop #' .. capturedProp.id .. ' entfernen?',
+                        header  = 'Prop #' .. capturedProp.id .. ' entfernen?',
                         content = capturedProp.itemName .. ' dauerhaft löschen?',
                         centered = true,
-                        cancel = true,
+                        cancel  = true,
                     })
                     if confirmed == 'confirm' then
                         TriggerServerEvent('prop_placement:remove', capturedProp.id)
@@ -392,7 +393,7 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
                         onSelect    = function()
                             local input = lib.inputDialog('Prop-Item geben', {
                                 { type = 'number', label = 'Server-ID des Spielers', required = true, min = 1 },
-                                { type = 'number', label = 'Anzahl',                 default = 1,     min = 1, max = 99 },
+                                { type = 'number', label = 'Anzahl', default = 1, min = 1, max = 99 },
                             })
                             if input and input[1] then
                                 TriggerServerEvent('prop_placement:adminGive',
@@ -414,14 +415,14 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
 
     table.insert(options, { title = '─────────────────', disabled = true })
     table.insert(options, {
-        title = '📋 Alle Props anzeigen',
+        title       = '📋 Alle Props anzeigen',
         description = 'Liste aller platzierten Props',
-        onSelect = function() TriggerServerEvent('prop_placement:requestPropList', nil) end,
+        onSelect    = function() TriggerServerEvent('prop_placement:requestPropList', nil) end,
     })
     table.insert(options, {
-        title = '🔍 Props nach Spieler filtern',
+        title       = '🔍 Props nach Spieler filtern',
         description = 'Props eines bestimmten Spielers',
-        onSelect = function()
+        onSelect    = function()
             local input = lib.inputDialog('Spieler filtern', {
                 { type = 'text', label = 'License-Identifier (license:...)', required = true },
             })
@@ -431,9 +432,9 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
         end,
     })
     table.insert(options, {
-        title = '🗑 Props eines Spielers löschen',
+        title       = '🗑 Props eines Spielers löschen',
         description = 'Alle Props eines Spielers entfernen',
-        onSelect = function()
+        onSelect    = function()
             local input = lib.inputDialog('Spieler-Props löschen', {
                 { type = 'text', label = 'License-Identifier (license:...)', required = true },
             })
@@ -449,10 +450,10 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
         onSelect    = function()
             CreateThread(function()
                 local confirmed = lib.alertDialog({
-                    header = 'Alle Props löschen?',
-                    content = 'Diese Aktion löscht alle Props dauerhaft.',
+                    header   = 'Alle Props löschen?',
+                    content  = 'Diese Aktion löscht alle Props dauerhaft.',
                     centered = true,
-                    cancel = true,
+                    cancel   = true,
                 })
                 if confirmed == 'confirm' then TriggerServerEvent('prop_placement:adminClearAll') end
             end)
@@ -467,22 +468,29 @@ end)
 -- Initialisierung
 -- ─────────────────────────────────────────────────────────
 
+-- FIX #6: syncInProgress Guard verhindert Doppel-Sync wenn onClientResourceStart
+--         und playerSpawned fast gleichzeitig feuern.
 local function WaitForCollisionAndSync()
+    if hasSynced or syncInProgress then return end
+    syncInProgress = true
+
     local ped    = PlayerPedId()
     local waited = 0
     repeat
         Wait(500); waited = waited + 500; ped = PlayerPedId()
     until HasCollisionLoadedAroundEntity(ped) or waited >= 10000
     Wait(500)
-    if not hasSynced then
-        hasSynced = true
-        TriggerServerEvent('prop_placement:requestSync')
-    end
+
+    hasSynced      = true
+    syncInProgress = false
+    TriggerServerEvent('prop_placement:requestSync')
 end
 
 AddEventHandler('onClientResourceStart', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
-    hasSynced = false
+    -- Flags zurücksetzen damit ein echter Neustart der Ressource einen neuen Sync auslöst
+    hasSynced      = false
+    syncInProgress = false
     CreateThread(function()
         WaitForCollisionAndSync()
         DebugLog('Sync via onClientResourceStart')

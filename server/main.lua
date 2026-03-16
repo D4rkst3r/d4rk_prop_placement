@@ -48,15 +48,16 @@ local function GetPropList()
     return list
 end
 
+-- FIX #2: os.clock() durch GetGameTimer() ersetzt (os.clock = CPU-Zeit, nicht Wanduhr)
 local function IsOnCooldown(identifier)
     if Config.PlacementCooldown <= 0 then return false end
     local last = cooldowns[identifier]
     if not last then return false end
-    return (os.clock() * 1000 - last) < Config.PlacementCooldown
+    return (GetGameTimer() - last) < Config.PlacementCooldown
 end
 
 local function SetCooldown(identifier)
-    cooldowns[identifier] = os.clock() * 1000
+    cooldowns[identifier] = GetGameTimer()
 end
 
 local function RemovePlayerProps(identifier)
@@ -234,8 +235,32 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
     end
 
     SetCooldown(identifier)
-    local propId        = nextId; nextId = nextId + 1
-    local propData      = {
+
+    -- FIX #12: ID nicht mehr manuell übergeben – MySQL AUTO_INCREMENT bestimmt die ID.
+    -- Für persistente Props: erst DB-Insert, dann ID aus DB verwenden.
+    -- Für nicht-persistente Props: weiterhin nextId als In-Memory-Zähler.
+    local propId
+    local propData
+
+    if propConfig.persistent then
+        local dbId = MySQL.insert.await(
+            'INSERT INTO prop_placement_props (item_name,model,x,y,z,rotation,owner_identifier,owner_job,persistent) VALUES (?,?,?,?,?,?,?,?,?)',
+            { itemName, propConfig.model, posData.x, posData.y, posData.z, posData.rotation or 0.0, identifier, nil, 1 }
+        )
+        if not dbId or dbId <= 0 then
+            -- DB-Insert fehlgeschlagen – Item zurückgeben und abbrechen
+            exports.ox_inventory:AddItem(src, itemName, 1)
+            lib.notify(src, { title = 'Fehler', description = 'Datenbankfehler beim Platzieren.', type = 'error' })
+            return
+        end
+        propId = dbId
+        -- nextId anpassen damit In-Memory-IDs nie mit DB-IDs kollidieren
+        if dbId >= nextId then nextId = dbId + 1 end
+    else
+        propId = nextId; nextId = nextId + 1
+    end
+
+    propData = {
         id              = propId,
         itemName        = itemName,
         model           = propConfig.model,
@@ -248,13 +273,6 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
     }
     placedProps[propId] = propData
     IncrementPlayerProps(identifier)
-
-    if propConfig.persistent then
-        MySQL.insert(
-            'INSERT INTO prop_placement_props (id,item_name,model,x,y,z,rotation,owner_identifier,owner_job,persistent) VALUES (?,?,?,?,?,?,?,?,?,?)',
-            { propId, itemName, propConfig.model, posData.x, posData.y, posData.z, posData.rotation or 0.0, identifier, nil, 1 }
-        )
-    end
 
     TriggerClientEvent('prop_placement:propPlaced', -1, propData)
     lib.notify(src, { title = 'Platziert! ✅', description = propConfig.label .. ' platziert.', type = 'success' })
@@ -289,6 +307,9 @@ RegisterNetEvent('prop_placement:remove', function(propId)
     local admin      = IsAdmin(src)
     local propConfig = Config.Props[prop.itemName]
 
+    -- FIX #5: ownerOnly = false bedeutet, dass JEDER Spieler diesen Prop entfernen kann
+    -- (gewollt für Polizei-Props wie Kegel/Absperrungen – kein Item-Rückgabe-Exploit,
+    --  da das Item an den Entfernenden geht, nicht an den ursprünglichen Besitzer).
     local ownerOnly  = true
     if propConfig ~= nil and propConfig.ownerOnly ~= nil then
         ownerOnly = propConfig.ownerOnly
@@ -323,12 +344,8 @@ RegisterNetEvent('prop_placement:adminGive', function(targetId, itemName, amount
     amount = math.max(1, math.min(amount or 1, 99))
     exports.ox_inventory:AddItem(targetId, itemName, amount)
     lib.notify(src,
-        {
-            title = 'Item gegeben',
-            description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId),
-            type =
-            'success'
-        })
+        { title = 'Item gegeben', description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId), type =
+        'success' })
     lib.notify(targetId,
         { title = 'Item erhalten', description = ('%dx %s erhalten.'):format(amount, propConfig.label), type = 'success' })
     LogPropAction('admin_give', src, GetIdentifier(src), GetPlayerName(src) or 'Unbekannt', nil, itemName, nil, nil,
@@ -379,7 +396,8 @@ RegisterNetEvent('prop_placement:requestPropList', function(filterIdentifier)
             })
         end
     end
-    TriggerClientEvent('prop_placement:receivePropList', src, list)
+    -- FIX #4: filterIdentifier als dritten Parameter mitsenden damit Client den Filter-Namen anzeigen kann
+    TriggerClientEvent('prop_placement:receivePropList', src, list, filterIdentifier)
 end)
 
 RegisterNetEvent('prop_placement:requestAdminMenu', function()
@@ -447,6 +465,7 @@ RegisterCommand('prop_clearall', function(src)
     print(('[prop_placement] Alle %d Props gelöscht.'):format(count))
 end, true)
 
+-- FIX #3: true statt false – FiveM-ACE prüft den Befehl auf Serverebene ab
 RegisterCommand('giveprop', function(src, args)
     if src ~= 0 and not IsAdmin(src) then return end
     local itemName = args[1]
@@ -459,7 +478,7 @@ RegisterCommand('giveprop', function(src, args)
     if not target then return end
     exports.ox_inventory:AddItem(target, itemName, amount)
     print(('[prop_placement] %dx %s → Spieler %d gegeben.'):format(amount, Config.Props[itemName].label, target))
-end, false)
+end, true)
 
 RegisterCommand('prop_list', function(src)
     if src ~= 0 and not IsAdmin(src) then return end

@@ -24,10 +24,11 @@ server_scripts {
     'server/main.lua',
 }
 
+-- FIX #9: data/items.lua entfernt – wird nie von FiveM ausgeliefert/verwendet.
+-- Items werden automatisch via exports.ox_inventory:Items() in server/main.lua registriert.
 -- Icons fuer ox_inventory (512x512 PNG, Name = item_name.png)
 files {
     'web/images/*.png',
-    'data/items.lua',
 }
 
 lua54 'yes'

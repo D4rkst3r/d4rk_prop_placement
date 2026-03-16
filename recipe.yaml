@@ -61,10 +61,12 @@ tasks:
   - action: waste_time
     seconds: 5
 
-  - action: replace_string
-    file: ./server.cfg
-    search: "{{serverEndpoints}}"
-    replace: "{{serverEndpoints}}"
+  # FIX #11: replace_string war ein No-Op (search == replace).
+  # Hier den echten Endpunkt eintragen, z.B. "endpoint_add_tcp 0.0.0.0:30120"
+  # - action: replace_string
+  #   file: ./server.cfg
+  #   search: "{{serverEndpoints}}"
+  #   replace: "endpoint_add_tcp 0.0.0.0:30120"
 
   - action: query_database
     query: "CREATE TABLE IF NOT EXISTS `ox_inventory` (`id` INT UNSIGNED NOT NULL AUTO_INCREMENT, `owner` VARCHAR(60) DEFAULT NULL, `name` VARCHAR(60) NOT NULL, `label` VARCHAR(60) DEFAULT NULL, `data` MEDIUMTEXT NOT NULL, `slots` SMALLINT UNSIGNED NOT NULL, `weight` INT UNSIGNED NOT NULL, `open` TINYINT(1) NOT NULL DEFAULT 0, PRIMARY KEY (`id`), INDEX `owner` (`owner`), INDEX `name` (`name`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"

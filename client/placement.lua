@@ -197,7 +197,7 @@ function StartPropPlacement(itemName, propConfig)
                 false, false, 2, nil, nil, false
             )
 
-            -- ── OPTIMIERT: 3×3 statt 5×5 Raster (9 statt 25 DrawMarker-Calls) ──
+            -- ── OPTIMIERT: 3×3 statt 5×5 Raster ──────────
             if snapEnabled and Config.SnapToGrid.Enabled then
                 local gs = Config.SnapToGrid.GridSize
                 for dx = -1, 1 do
@@ -262,7 +262,7 @@ function StartPropPlacement(itemName, propConfig)
                     if (now - lastSnapToggle) >= 300 then
                         snapEnabled    = not snapEnabled
                         lastSnapToggle = now
-                        cachedText     = '' -- TextUI-Cache leeren damit sofort aktualisiert wird
+                        cachedText     = ''
                         lib.notify({
                             title       = 'Snap-to-Grid',
                             description = snapEnabled and 'Aktiviert' or 'Deaktiviert',
@@ -279,7 +279,7 @@ function StartPropPlacement(itemName, propConfig)
                 if (now - lastRotateTime) >= 80 then
                     currentRotation = (currentRotation + Config.Placement.RotationStep) % 360.0
                     lastRotateTime  = now
-                    cachedText      = '' -- TextUI-Cache leeren
+                    cachedText      = ''
                 end
             end
 
@@ -289,20 +289,20 @@ function StartPropPlacement(itemName, propConfig)
                 if (now - lastRotateTime) >= 80 then
                     currentRotation = (currentRotation - Config.Placement.RotationStep + 360.0) % 360.0
                     lastRotateTime  = now
-                    cachedText      = '' -- TextUI-Cache leeren
+                    cachedText      = ''
                 end
             end
 
             -- ── Höhe hoch ─────────────────────────────────
             if IsDisabledControlJustPressed(0, KEY_SCROLL_UP) or IsControlJustPressed(0, KEY_SCROLL_UP) then
                 zOffset    = math.min(Config.Placement.ZMax, zOffset + Config.Placement.ZStep)
-                cachedText = '' -- TextUI-Cache leeren (Höhe hat sich geändert)
+                cachedText = ''
             end
 
             -- ── Höhe runter ───────────────────────────────
             if IsDisabledControlJustPressed(0, KEY_SCROLL_DOWN) or IsControlJustPressed(0, KEY_SCROLL_DOWN) then
                 zOffset    = math.max(Config.Placement.ZMin, zOffset - Config.Placement.ZStep)
-                cachedText = '' -- TextUI-Cache leeren
+                cachedText = ''
             end
 
             Wait(0)
@@ -312,9 +312,9 @@ function StartPropPlacement(itemName, propConfig)
     end)
 end
 
+-- FIX #8: Redundantes 'isPlacing = false' entfernt – CleanupPreview() setzt es bereits zurück
 function CancelPlacementExternal()
     if isPlacing then
-        isPlacing = false
         CleanupPreview()
     end
 end
