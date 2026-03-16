@@ -2,15 +2,13 @@
     ╔══════════════════════════════════════════════════════╗
     ║           prop_placement – client/main.lua           ║
     ║    Prop-Spawning, Sync, ox_target & Admin-Menü       ║
-    ║    OPTIMIERT für 400+ Spieler                        ║
     ╚══════════════════════════════════════════════════════╝
 ]]
 
-local placedProps = {}
-local allPropData = {}
-local propGrid    = {}
-local isSyncing   = false -- Guard gegen gleichzeitige syncAll-Aufrufe
-local syncToken   = 0     -- Einfache Token-Logik um veraltete syncAll-Threads zu erkennen (siehe weiter unten)
+local placedProps = {}    -- [propId] = entity
+local allPropData = {}    -- [propId] = propData
+local propGrid    = {}    -- ['cellX:cellY'] = { propId, ... }
+local hasSynced   = false -- Guard gegen Doppel-Sync
 
 -- ─────────────────────────────────────────────────────────
 -- Hilfsfunktionen
@@ -157,6 +155,12 @@ local function SpawnProp(propData)
 
     local entity = CreateObject(model, propData.x, propData.y, propData.z, false, false, false)
 
+    if not DoesEntityExist(entity) then
+        DebugLog('Entity konnte nicht erstellt werden: #' .. propId)
+        SetModelAsNoLongerNeeded(model)
+        return
+    end
+
     SetEntityAsMissionEntity(entity, true, true)
     SetEntityRotation(entity, 0.0, 0.0, propData.rotation, 2, true)
     FreezeEntityPosition(entity, true)
@@ -164,8 +168,8 @@ local function SpawnProp(propData)
     SetEntityInvincible(entity, true)
     SetEntityCanBeDamaged(entity, false)
     SetEntityAlpha(entity, 255, false)
-    NetworkSetEntityInvisibleToNetwork(entity, false) -- ← wieder rein
-    SetEntityLodDist(entity, 1000)                    -- ← neu dazu
+    NetworkSetEntityInvisibleToNetwork(entity, false)
+    SetEntityLodDist(entity, 1000)
 
     placedProps[propId] = entity
     allPropData[propId] = propData
@@ -205,14 +209,12 @@ local function ClearAllLocalProps()
     placedProps = {}
     allPropData = {}
     propGrid    = {}
-    -- isSyncing hier NICHT zurücksetzen!
 end
 
 -- ─────────────────────────────────────────────────────────
--- Streaming-System mit Grid + dynamischem Intervall
+-- Streaming-System
 -- ─────────────────────────────────────────────────────────
 
--- Streaming-State (außerhalb Thread damit syncAll es zurücksetzen kann)
 local streamStillFrames = 0
 
 if Config.Streaming.Enabled then
@@ -279,14 +281,19 @@ end)
 -- ─────────────────────────────────────────────────────────
 -- Net Events – Server → Client
 -- ─────────────────────────────────────────────────────────
+RegisterNetEvent('prop_placement:resetSyncGuard', function()
+    hasSynced = false
+end)
 
 RegisterNetEvent('prop_placement:syncAll', function(propList)
+    -- Guard setzen damit kein zweiter Sync gleichzeitig startet
+    hasSynced = true
     ClearAllLocalProps()
 
     CreateThread(function()
         local playerPos = GetEntityCoords(PlayerPedId())
 
-        -- Doppelte bestehende Welt-Objekte entfernen
+        -- Bestehende Welt-Duplikate an diesen Koordinaten entfernen
         for _, propData in ipairs(propList) do
             local model    = GetHashKey(propData.model)
             local existing = GetClosestObjectOfType(
@@ -299,6 +306,7 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
             end
         end
 
+        -- allPropData und Grid aufbauen
         for _, propData in ipairs(propList) do
             allPropData[propData.id] = propData
             if Config.Grid.Enabled then
@@ -306,6 +314,7 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
             end
         end
 
+        -- Props in Reichweite spawnen
         for _, propData in ipairs(propList) do
             local dist = #(playerPos - vector3(propData.x, propData.y, propData.z))
             if not Config.Streaming.Enabled or dist <= Config.Streaming.SpawnRadius then
@@ -313,6 +322,9 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
                 Wait(30)
             end
         end
+
+        streamStillFrames = 0
+        DebugLog(('syncAll abgeschlossen: %d Props verarbeitet'):format(#propList))
     end)
 
     DebugLog(('Sync: %d Props empfangen'):format(#propList))
@@ -534,7 +546,23 @@ end)
 -- Initialisierung
 -- ─────────────────────────────────────────────────────────
 
+-- Feuert wenn die Ressource (neu) gestartet wird.
+-- Spieler ist dabei bereits in der Welt → direkt synchen.
+AddEventHandler('onClientResourceStart', function(resourceName)
+    if resourceName ~= GetCurrentResourceName() then return end
+    hasSynced = false
+    CreateThread(function()
+        Wait(1000)
+        if not hasSynced then
+            hasSynced = true
+            TriggerServerEvent('prop_placement:requestSync')
+            DebugLog('Sync via onClientResourceStart')
+        end
+    end)
+end)
 
+-- Feuert beim ersten Spawn nach Join / Respawn.
+-- Wartet auf Kollision damit GTA Objekte nicht sofort wieder löscht.
 AddEventHandler('playerSpawned', function()
     CreateThread(function()
         local ped    = PlayerPedId()
@@ -545,7 +573,12 @@ AddEventHandler('playerSpawned', function()
             ped = PlayerPedId()
         until HasCollisionLoadedAroundEntity(ped) or waited >= 10000
         Wait(500)
-        TriggerServerEvent('prop_placement:requestSync')
+
+        if not hasSynced then
+            hasSynced = true
+            TriggerServerEvent('prop_placement:requestSync')
+            DebugLog('Sync via playerSpawned')
+        end
     end)
 end)
 
@@ -572,8 +605,16 @@ RegisterCommand('proplist', function()
 end, false)
 
 RegisterCommand('propreload', function()
-    -- Nur für Admins – Prüfung erfolgt serverseitig
-    TriggerServerEvent('prop_placement:reloadProps')
+    -- Sofort lokal alles entfernen damit man es sieht
+    ClearAllLocalProps()
+    lib.notify({ title = 'Props werden neu geladen...', type = 'inform', duration = 2000 })
+
+    -- Kurze Pause damit das Verschwinden sichtbar ist
+    CreateThread(function()
+        Wait(500)
+        -- Dann erst Server fragen – der schickt syncAll zurück
+        TriggerServerEvent('prop_placement:reloadProps')
+    end)
 end, false)
 
 if Config.Debug then

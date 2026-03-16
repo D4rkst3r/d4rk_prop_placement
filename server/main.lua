@@ -410,10 +410,7 @@ RegisterNetEvent('prop_placement:reloadProps', function()
         return
     end
 
-    -- DB neu einlesen
     local result    = MySQL.query.await('SELECT * FROM prop_placement_props WHERE persistent = 1 ORDER BY id ASC')
-
-    -- In-Memory zurücksetzen
     placedProps     = {}
     playerPropCount = {}
     nextId          = 1
@@ -438,13 +435,15 @@ RegisterNetEvent('prop_placement:reloadProps', function()
         end
     end
 
-    -- Alle Clients neu synchronisieren
+    -- Erst hasSynced zurücksetzen, dann syncAll schicken
+    TriggerClientEvent('prop_placement:resetSyncGuard', -1)
+    Wait(100)
     TriggerClientEvent('prop_placement:syncAll', -1, GetPropList())
 
     local count = result and #result or 0
     lib.notify(src, {
         title       = 'Props neu geladen ✅',
-        description = count .. ' Props aus DB geladen und an alle Clients gesendet.',
+        description = count .. ' Props neu geladen.',
         type        = 'success',
     })
     print(('[prop_placement] Admin %d: Props neu geladen (%d Props)'):format(src, count))
