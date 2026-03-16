@@ -161,6 +161,7 @@ local function SpawnProp(propData)
         return
     end
 
+    SetEntityAsMissionEntity(entity, true, true)
     FreezeEntityPosition(entity, false) -- kurz auftauen damit PlaceOnGround funktioniert
     PlaceObjectOnGroundProperly(entity) -- auf Boden snappen
     FreezeEntityPosition(entity, true)  -- wieder einfrieren
@@ -330,32 +331,22 @@ RegisterNetEvent('prop_placement:resetSyncGuard', function()
 end)
 
 RegisterNetEvent('prop_placement:syncAll', function(propList)
+    DebugLog('syncAll aufgerufen mit ' .. #propList .. ' Props')
     hasSynced = true
     ClearAllLocalProps()
 
-    CreateThread(function()
-        local playerPos = GetEntityCoords(PlayerPedId())
-
-        for _, propData in ipairs(propList) do
-            allPropData[propData.id] = propData
-            if Config.Grid.Enabled then
-                AddToGrid(propData.id, propData.x, propData.y)
-            end
+    -- Nur Daten aufbauen, KEIN direktes Spawnen
+    for _, propData in ipairs(propList) do
+        allPropData[propData.id] = propData
+        if Config.Grid.Enabled then
+            AddToGrid(propData.id, propData.x, propData.y)
         end
+    end
 
-        for _, propData in ipairs(propList) do
-            local dist = #(playerPos - vector3(propData.x, propData.y, propData.z))
-            if not Config.Streaming.Enabled or dist <= Config.Streaming.SpawnRadius then
-                SpawnProp(propData)
-                Wait(30)
-            end
-        end
+    -- Streaming-Intervall zurücksetzen damit sofort geprüft wird
+    streamStillFrames = 0
 
-        streamStillFrames = 0
-        DebugLog(('syncAll abgeschlossen: %d Props verarbeitet'):format(#propList))
-    end)
-
-    DebugLog(('Sync: %d Props empfangen'):format(#propList))
+    DebugLog(('syncAll: %d Props in allPropData geladen – Streaming übernimmt'):format(#propList))
 end)
 
 RegisterNetEvent('prop_placement:propPlaced', function(propData)
@@ -580,7 +571,16 @@ AddEventHandler('onClientResourceStart', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
     hasSynced = false
     CreateThread(function()
-        Wait(1000)
+        -- Warten bis Kollision geladen ist (max 10s) – genau wie playerSpawned
+        local ped    = PlayerPedId()
+        local waited = 0
+        repeat
+            Wait(500)
+            waited = waited + 500
+            ped = PlayerPedId()
+        until HasCollisionLoadedAroundEntity(ped) or waited >= 10000
+        Wait(500)
+
         if not hasSynced then
             hasSynced = true
             TriggerServerEvent('prop_placement:requestSync')

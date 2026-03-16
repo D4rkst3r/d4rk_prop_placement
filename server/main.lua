@@ -53,18 +53,6 @@ local function GetPropList()
     return list
 end
 
-local function GetNearbyProps(coords, radius)
-    local list = {}
-    local r2   = radius * radius
-    for _, prop in pairs(placedProps) do
-        local dx = prop.x - coords.x
-        local dy = prop.y - coords.y
-        local dz = prop.z - coords.z
-        if (dx * dx + dy * dy + dz * dz) <= r2 then table.insert(list, prop) end
-    end
-    return list
-end
-
 local function IsOnCooldown(identifier)
     if Config.PlacementCooldown <= 0 then return false end
     local last = cooldowns[identifier]
