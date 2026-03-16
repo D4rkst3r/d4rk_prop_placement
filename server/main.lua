@@ -1,28 +1,16 @@
 --[[
     ╔══════════════════════════════════════════════════════╗
     ║           prop_placement – server/main.lua           ║
-    ║   Server-side Entities (wie qb-propplacing)          ║
-    ║   Kein Chunk-Bug, kein Retry-Loop                    ║
+    ║   Koordinaten-basiert – Entities client-seitig       ║
     ╚══════════════════════════════════════════════════════╝
-
-    ARCHITEKTUR:
-    ─────────────
-    Server erstellt alle Prop-Entities mit CreateObjectNoOffset + isNetwork=true.
-    Der Server gibt jedem Prop eine NetID (NetworkGetNetworkIdFromEntity).
-    Clients erhalten nur die NetID und rufen NetToObj(netId) auf.
-    GTA's eigene Engine übernimmt Streaming und Sichtbarkeit automatisch.
 ]]
 
-local placedProps     = {} -- [id] = { id, itemName, model, x,y,z, rotation, ownerIdentifier, persistent, entity, netId }
+local placedProps     = {}
 local nextId          = 1
 local cooldowns       = {}
 local playerPropCount = {}
 local dbReady         = false
-local syncQueue       = {} -- Clients die vor DB-Load requestSync schickten
-
--- ─────────────────────────────────────────────────────────
--- Hilfsfunktionen
--- ─────────────────────────────────────────────────────────
+local syncQueue       = {}
 
 local function DebugLog(msg)
     if Config.Debug then print('[prop_placement][SERVER] ' .. tostring(msg)) end
@@ -54,27 +42,9 @@ local function DecrementPlayerProps(identifier)
     playerPropCount[identifier] = count > 0 and count or nil
 end
 
--- Serialisierbares PropData für Clients (ohne server-seitige Entity-Handle)
-local function ToClientData(prop)
-    return {
-        id              = prop.id,
-        itemName        = prop.itemName,
-        model           = prop.model,
-        x               = prop.x,
-        y               = prop.y,
-        z               = prop.z,
-        rotation        = prop.rotation,
-        ownerIdentifier = prop.ownerIdentifier,
-        persistent      = prop.persistent,
-        netId           = prop.netId,
-    }
-end
-
 local function GetPropList()
     local list = {}
-    for _, prop in pairs(placedProps) do
-        table.insert(list, ToClientData(prop))
-    end
+    for _, prop in pairs(placedProps) do table.insert(list, prop) end
     return list
 end
 
@@ -89,64 +59,34 @@ local function SetCooldown(identifier)
     cooldowns[identifier] = os.clock() * 1000
 end
 
--- ─────────────────────────────────────────────────────────
--- Server-seitige Entity erstellen
--- ─────────────────────────────────────────────────────────
-
-local function CreatePropEntity(model, x, y, z, rotation)
-    local hash   = GetHashKey(model)
-    local entity = CreateObjectNoOffset(hash, x, y, z, true, false, false)
-    if not DoesEntityExist(entity) then
-        DebugLog('FEHLER: Entity konnte nicht erstellt werden für Modell: ' .. model)
-        return nil, nil
+local function RemovePlayerProps(identifier)
+    local removedIds = {}
+    for id, prop in pairs(placedProps) do
+        if prop.ownerIdentifier == identifier then table.insert(removedIds, id) end
     end
-    FreezeEntityPosition(entity, true)
-    SetEntityRotation(entity, 0.0, 0.0, rotation or 0.0, 2, true)
-
-    -- Allen Clients mitteilen dass diese Entity existiert (beschleunigt NetID-Vergabe)
-    NetworkSetEntityExistsOnAllMachines(entity, true)
-
-    -- Retry-Loop bis FiveM die Entity im Netzwerk registriert hat.
-    -- NetworkGetNetworkIdFromEntity liefert 65532/65533 (0xFFFC/0xFFFD) solange
-    -- die Registration noch aussteht – das kann mehrere Ticks dauern.
-    local netId   = 0
-    local attempt = 0
-    repeat
-        Wait(50)
-        netId   = NetworkGetNetworkIdFromEntity(entity)
-        attempt = attempt + 1
-    until (netId > 0 and netId < 65000) or attempt >= 40 -- max 2s
-
-    if netId == 0 or netId >= 65000 then
-        DebugLog(('FEHLER: NetID nach 40 Versuchen ungültig (%d) für %s'):format(netId, model))
-        DeleteEntity(entity)
-        return nil, nil
+    if #removedIds == 0 then return 0 end
+    for _, id in ipairs(removedIds) do
+        placedProps[id] = nil
+        TriggerClientEvent('prop_placement:propRemoved', -1, id)
     end
-
-    DebugLog(('Entity erstellt: model=%s | entity=%d | netId=%d'):format(model, entity, netId))
-    return entity, netId
-end
-
-local function DeletePropEntity(prop)
-    if prop and prop.entity and DoesEntityExist(prop.entity) then
-        DeleteEntity(prop.entity)
-    end
+    playerPropCount[identifier] = nil
+    local placeholders = {}
+    for i = 1, #removedIds do placeholders[i] = '?' end
+    MySQL.query('DELETE FROM prop_placement_props WHERE id IN (' .. table.concat(placeholders, ',') .. ')', removedIds)
+    return #removedIds
 end
 
 -- ─────────────────────────────────────────────────────────
--- DB laden & Entities erstellen
+-- DB laden
 -- ─────────────────────────────────────────────────────────
 
 CreateThread(function()
     local result = MySQL.query.await('SELECT * FROM prop_placement_props WHERE persistent = 1 ORDER BY id ASC')
     if result then
         for _, row in ipairs(result) do
-            local id            = row.id
-            local owner         = row.owner_identifier
-
-            local entity, netId = CreatePropEntity(row.model, row.x, row.y, row.z, row.rotation)
-
-            placedProps[id]     = {
+            local id        = row.id
+            local owner     = row.owner_identifier
+            placedProps[id] = {
                 id              = id,
                 itemName        = row.item_name,
                 model           = row.model,
@@ -156,26 +96,22 @@ CreateThread(function()
                 rotation        = row.rotation,
                 ownerIdentifier = owner,
                 persistent      = true,
-                entity          = entity,
-                netId           = netId,
             }
             if owner then playerPropCount[owner] = (playerPropCount[owner] or 0) + 1 end
             if id >= nextId then nextId = id + 1 end
         end
-        print(('[prop_placement] %d persistente Props aus DB geladen und erstellt.'):format(#result))
+        print(('[prop_placement] %d persistente Props aus DB geladen.'):format(#result))
     end
 
-    -- dbReady setzen BEVOR syncQueue abgearbeitet wird
     dbReady = true
 
-    -- Clients versorgen die requestSync geschickt haben bevor DB fertig war
     for _, src in ipairs(syncQueue) do
         TriggerClientEvent('prop_placement:syncAll', src, GetPropList())
         DebugLog('Queued Sync → Spieler ' .. src)
     end
     syncQueue = {}
 
-    -- d4rk_livemap Integration
+    -- d4rk_livemap
     CreateThread(function()
         Wait(2000)
         local colorMap = { Allgemein = '#60a5fa', Polizei = '#f87171', Baustelle = '#fbbf24', Admin = '#c084fc' }
@@ -229,33 +165,7 @@ CreateThread(function()
 end)
 
 -- ─────────────────────────────────────────────────────────
--- Hilfsfunktion: Spieler-Props bereinigen
--- ─────────────────────────────────────────────────────────
-
-local function RemovePlayerProps(identifier)
-    local removedIds = {}
-    for id, prop in pairs(placedProps) do
-        if prop.ownerIdentifier == identifier then
-            table.insert(removedIds, id)
-        end
-    end
-    if #removedIds == 0 then return 0 end
-
-    for _, id in ipairs(removedIds) do
-        DeletePropEntity(placedProps[id])
-        placedProps[id] = nil
-        TriggerClientEvent('prop_placement:propRemoved', -1, id)
-    end
-    playerPropCount[identifier] = nil
-
-    local placeholders = {}
-    for i = 1, #removedIds do placeholders[i] = '?' end
-    MySQL.query('DELETE FROM prop_placement_props WHERE id IN (' .. table.concat(placeholders, ',') .. ')', removedIds)
-    return #removedIds
-end
-
--- ─────────────────────────────────────────────────────────
--- Net Events
+-- Events
 -- ─────────────────────────────────────────────────────────
 
 AddEventHandler('ox_inventory:usedItem', function(playerId, name)
@@ -270,9 +180,7 @@ AddEventHandler('playerDropped', function()
     cooldowns[identifier] = nil
     if Config.RemoveOnDisconnect then
         local removed = RemovePlayerProps(identifier)
-        if removed > 0 then
-            DebugLog(('Spieler %s – %d Props entfernt.'):format(identifier, removed))
-        end
+        if removed > 0 then DebugLog(('Spieler %s – %d Props entfernt.'):format(identifier, removed)) end
     end
 end)
 
@@ -280,7 +188,7 @@ RegisterNetEvent('prop_placement:requestSync', function()
     local src = source
     if not dbReady then
         table.insert(syncQueue, src)
-        DebugLog('Sync queued für Spieler ' .. src .. ' (DB noch nicht bereit)')
+        DebugLog('Sync queued für Spieler ' .. src)
         return
     end
     TriggerClientEvent('prop_placement:syncAll', src, GetPropList())
@@ -305,9 +213,9 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
         local current = CountPlayerProps(identifier)
         if current >= Config.MaxPropsPerPlayer then
             lib.notify(src, {
-                title = 'Limit erreicht',
+                title       = 'Limit erreicht',
                 description = ('%d/%d Props.'):format(current, Config.MaxPropsPerPlayer),
-                type = 'warning'
+                type        = 'warning'
             }); return
         end
     end
@@ -327,16 +235,7 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
 
     SetCooldown(identifier)
     local propId        = nextId; nextId = nextId + 1
-
-    -- Entity server-seitig erstellen
-    local entity, netId = CreatePropEntity(propConfig.model, posData.x, posData.y, posData.z, posData.rotation or 0.0)
-    if not entity then
-        -- Entity-Erstellung fehlgeschlagen → Item zurückgeben
-        exports.ox_inventory:AddItem(src, itemName, 1)
-        lib.notify(src, { title = 'Fehler', description = 'Prop konnte nicht erstellt werden.', type = 'error' }); return
-    end
-
-    local propData = {
+    local propData      = {
         id              = propId,
         itemName        = itemName,
         model           = propConfig.model,
@@ -346,8 +245,6 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
         rotation        = posData.rotation or 0.0,
         ownerIdentifier = identifier,
         persistent      = propConfig.persistent,
-        entity          = entity,
-        netId           = netId,
     }
     placedProps[propId] = propData
     IncrementPlayerProps(identifier)
@@ -359,13 +256,11 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
         )
     end
 
-    -- An alle Clients broadcasten (ohne server-seitigen Entity-Handle)
-    TriggerClientEvent('prop_placement:propPlaced', -1, ToClientData(propData))
+    TriggerClientEvent('prop_placement:propPlaced', -1, propData)
     lib.notify(src, { title = 'Platziert! ✅', description = propConfig.label .. ' platziert.', type = 'success' })
     LogPropAction('place', src, identifier, GetPlayerName(src) or 'Unbekannt', propId, itemName, propConfig.model,
         { x = posData.x, y = posData.y, z = posData.z, rotation = posData.rotation }, {})
 
-    -- d4rk_livemap Integration
     pcall(function()
         exports.d4rk_livemap:AddMarker({
             id = 'prop_' .. propId,
@@ -405,17 +300,14 @@ RegisterNetEvent('prop_placement:remove', function(propId)
 
     exports.ox_inventory:AddItem(src, prop.itemName, 1)
     if prop.ownerIdentifier then DecrementPlayerProps(prop.ownerIdentifier) end
-
-    -- Entity server-seitig löschen (Clients merken das automatisch)
-    DeletePropEntity(prop)
     placedProps[propId] = nil
     MySQL.query('DELETE FROM prop_placement_props WHERE id = ?', { propId })
     TriggerClientEvent('prop_placement:propRemoved', -1, propId)
 
     lib.notify(src, {
-        title = 'Entfernt ✅',
+        title       = 'Entfernt ✅',
         description = (propConfig and propConfig.label or prop.itemName) .. ' ins Inventar.',
-        type = 'success'
+        type        = 'success'
     })
     LogPropAction('remove', src, identifier, GetPlayerName(src) or 'Unbekannt', propId, prop.itemName, prop.model,
         { x = prop.x, y = prop.y, z = prop.z, rotation = prop.rotation }, { owner = prop.ownerIdentifier })
@@ -430,16 +322,11 @@ RegisterNetEvent('prop_placement:adminGive', function(targetId, itemName, amount
     if not propConfig or not GetPlayerName(targetId) then return end
     amount = math.max(1, math.min(amount or 1, 99))
     exports.ox_inventory:AddItem(targetId, itemName, amount)
-    lib.notify(src, {
-        title = 'Item gegeben',
-        description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId),
-        type = 'success'
-    })
-    lib.notify(targetId, {
-        title = 'Item erhalten',
-        description = ('%dx %s erhalten.'):format(amount, propConfig.label),
-        type = 'success'
-    })
+    lib.notify(src,
+        { title = 'Item gegeben', description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId), type =
+        'success' })
+    lib.notify(targetId,
+        { title = 'Item erhalten', description = ('%dx %s erhalten.'):format(amount, propConfig.label), type = 'success' })
     LogPropAction('admin_give', src, GetIdentifier(src), GetPlayerName(src) or 'Unbekannt', nil, itemName, nil, nil,
         { target_id = targetId, amount = amount })
 end)
@@ -447,14 +334,11 @@ end)
 RegisterNetEvent('prop_placement:adminClearAll', function()
     local src = source
     if not IsAdmin(src) then return end
-
     local count = 0
     local ids = {}
     for id in pairs(placedProps) do table.insert(ids, id) end
     for _, id in ipairs(ids) do
-        DeletePropEntity(placedProps[id])
-        placedProps[id] = nil
-        count = count + 1
+        placedProps[id] = nil; count = count + 1
     end
     playerPropCount = {}
     MySQL.query('DELETE FROM prop_placement_props')
@@ -509,23 +393,16 @@ RegisterNetEvent('prop_placement:reloadProps', function()
         lib.notify(src, { title = 'Keine Berechtigung', type = 'error' }); return
     end
 
-    -- Alle bestehenden Entities löschen
-    for _, prop in pairs(placedProps) do
-        DeletePropEntity(prop)
-    end
     placedProps     = {}
     playerPropCount = {}
     nextId          = 1
 
-    -- Neu aus DB laden und Entities erstellen
     local result    = MySQL.query.await('SELECT * FROM prop_placement_props WHERE persistent = 1 ORDER BY id ASC')
     if result then
         for _, row in ipairs(result) do
-            local id            = row.id
-            local owner         = row.owner_identifier
-            local entity, netId = CreatePropEntity(row.model, row.x, row.y, row.z, row.rotation)
-
-            placedProps[id]     = {
+            local id        = row.id
+            local owner     = row.owner_identifier
+            placedProps[id] = {
                 id              = id,
                 itemName        = row.item_name,
                 model           = row.model,
@@ -535,23 +412,16 @@ RegisterNetEvent('prop_placement:reloadProps', function()
                 rotation        = row.rotation,
                 ownerIdentifier = owner,
                 persistent      = true,
-                entity          = entity,
-                netId           = netId,
             }
             if owner then playerPropCount[owner] = (playerPropCount[owner] or 0) + 1 end
             if id >= nextId then nextId = id + 1 end
         end
     end
 
-    -- Alle Clients mit neuen NetIDs versorgen
     TriggerClientEvent('prop_placement:syncAll', -1, GetPropList())
 
     local count = result and #result or 0
-    lib.notify(src, {
-        title       = 'Props neu geladen ✅',
-        description = count .. ' Props neu geladen.',
-        type        = 'success',
-    })
+    lib.notify(src, { title = 'Props neu geladen ✅', description = count .. ' Props neu geladen.', type = 'success' })
     print(('[prop_placement] Admin %d: Props neu geladen (%d Props)'):format(src, count))
 end)
 
@@ -565,9 +435,7 @@ RegisterCommand('prop_clearall', function(src)
     local ids = {}
     for id in pairs(placedProps) do table.insert(ids, id) end
     for _, id in ipairs(ids) do
-        DeletePropEntity(placedProps[id])
-        placedProps[id] = nil
-        count = count + 1
+        placedProps[id] = nil; count = count + 1
     end
     playerPropCount = {}
     MySQL.query('DELETE FROM prop_placement_props')
@@ -593,21 +461,12 @@ RegisterCommand('prop_list', function(src)
     if src ~= 0 and not IsAdmin(src) then return end
     local count = 0
     for id, prop in pairs(placedProps) do
-        print(('  #%d | %s | %.1f %.1f %.1f | netId:%s | %s'):format(
-            id, prop.itemName, prop.x, prop.y, prop.z,
-            tostring(prop.netId), prop.ownerIdentifier or '?'))
+        print(('  #%d | %s | %.1f %.1f %.1f | %s'):format(
+            id, prop.itemName, prop.x, prop.y, prop.z, prop.ownerIdentifier or '?'))
         count = count + 1
     end
     print(('[prop_placement] Gesamt: %d Props'):format(count))
 end, true)
-
--- Resource-Stop: Entities werden automatisch gelöscht wenn die Ressource stoppt
-AddEventHandler('onResourceStop', function(resourceName)
-    if GetCurrentResourceName() ~= resourceName then return end
-    for _, prop in pairs(placedProps) do
-        DeletePropEntity(prop)
-    end
-end)
 
 -- ─────────────────────────────────────────────────────────
 -- Globale Funktionen für HTTP-API (server/logger.lua)
@@ -621,7 +480,6 @@ function RemovePropFromServer(propId)
     local prop = placedProps[propId]
     if not prop then return false, 'Prop nicht gefunden' end
     if prop.ownerIdentifier then DecrementPlayerProps(prop.ownerIdentifier) end
-    DeletePropEntity(prop)
     placedProps[propId] = nil
     MySQL.query('DELETE FROM prop_placement_props WHERE id = ?', { propId })
     TriggerClientEvent('prop_placement:propRemoved', -1, propId)
