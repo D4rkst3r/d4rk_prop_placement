@@ -41,13 +41,13 @@ Config.Streaming = {
 -- GridSize sollte >= SpawnRadius sein
 Config.Grid = {
     Enabled  = true,
-    GridSize = 200.0, -- Größe einer Gitterzelle in Metern
+    GridSize = 45.0, -- Gitterzellengröße (wie M-PropV2)
 }
 
 -- ─── Model-Preloading ─────────────────────────────────
 -- Props-Modelle beim Start vorladen für verzögerungsfreies Spawnen
 Config.Preloading = {
-    Enabled = true,
+    Enabled = false,
     Delay   = 3000, -- Wartezeit nach Resource-Start (ms)
 }
 

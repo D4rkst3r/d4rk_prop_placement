@@ -353,7 +353,7 @@ function catBadge(c) {
 
 async function loadHealth() {
   try {
-    const d = await api('/prop_placement/health');
+    const d = await api('/d4rk_prop_placement/health');
     document.getElementById('dot').className = d.status === 'ok' ? 'dot' : 'dot dead';
     const pill = document.getElementById('statusPill');
     if (d.status === 'ok') {
@@ -371,7 +371,7 @@ async function loadHealth() {
 
 async function loadStats() {
   try {
-    const d = await api('/prop_placement/stats');
+    const d = await api('/d4rk_prop_placement/stats');
     document.getElementById('sTotal').textContent  = fmt(d.total_logs);
     document.getElementById('s24h').textContent    = fmt(d.last_24h);
     const pl = (d.by_action||[]).find(a=>a.action==='place');
@@ -502,7 +502,7 @@ async function loadProps() {
   const fo = document.getElementById('pFOwner').value.toLowerCase();
   document.getElementById('propsTbl').innerHTML = '<div class="empty">Lädt...</div>';
   try {
-    const d = await api('/prop_placement/props?page='+propsP+'&pageSize=20');
+    const d = await api('/d4rk_prop_placement/props?page='+propsP+'&pageSize=20');
     const total = +(d.total || 0);
 
     document.getElementById('sActive').textContent    = fmt(total);
@@ -548,7 +548,7 @@ async function loadProps() {
 async function delProp(id, name) {
   if (!confirm('Prop #'+id+' ('+name+') löschen?\n\nDas Item wird NICHT zurückgelegt.')) return;
   try {
-    const d = await api('/prop_placement/props/remove?id='+id);
+    const d = await api('/d4rk_prop_placement/props/remove?id='+id);
     if (d.success) { await loadProps(); loadStats(); }
     else alert('Fehler: '+(d.error||'Unbekannt'));
   } catch { alert('Verbindungsfehler.'); }
@@ -558,7 +558,7 @@ function goProp(p) { propsP=p; loadProps(); }
 
 async function loadRecent() {
   try {
-    const d = await api('/prop_placement/logs?page=1');
+    const d = await api('/d4rk_prop_placement/logs?page=1');
     document.getElementById('recentActs').innerHTML =
       (d.data||[]).slice(0,7).map(log => {
         const t = new Date(log.created_at).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
@@ -672,7 +672,7 @@ SetHttpHandler(function(req, res)
     path, req.method, tostring(req.path)))
 
   -- Dashboard (kein Key nötig)
-  if path == '/prop_placement/dashboard' or path == '/dashboard' then
+  if path == '/d4rk_prop_placement/dashboard' or path == '/dashboard' then
     HtmlResponse(res, BuildDashboard()); return
   end
 
@@ -682,7 +682,7 @@ SetHttpHandler(function(req, res)
   end
 
   -- Health
-  if path == '/prop_placement/health' or path == '/health' then
+  if path == '/d4rk_prop_placement/health' or path == '/health' then
     JsonResponse(res, 200, {
       status    = 'ok',
       resource  = GetCurrentResourceName(),
@@ -692,7 +692,7 @@ SetHttpHandler(function(req, res)
   end
 
   -- Stats
-  if path == '/prop_placement/stats' or path == '/stats' then
+  if path == '/d4rk_prop_placement/stats' or path == '/stats' then
     local total      = MySQL.query.await('SELECT COUNT(*) as c FROM prop_placement_logs')
     local byAction   = MySQL.query.await('SELECT action, COUNT(*) as count FROM prop_placement_logs GROUP BY action')
     local topItems   = MySQL.query.await([[
@@ -711,13 +711,16 @@ SetHttpHandler(function(req, res)
               AND action IN ('place','remove')
             GROUP BY DATE(created_at), action ORDER BY dy ASC]])
 
-    local byDate = {}
+    local byDate     = {}
     if raw7d then
       for _, row in ipairs(raw7d) do
         local d = tostring(row.dy):sub(1, 10)
         if not byDate[d] then byDate[d] = { date = d, place = 0, remove = 0 } end
-        if row.action == 'place' then byDate[d].place = row.count
-        elseif row.action == 'remove' then byDate[d].remove = row.count end
+        if row.action == 'place' then
+          byDate[d].place = row.count
+        elseif row.action == 'remove' then
+          byDate[d].remove = row.count
+        end
       end
     end
     local activity7d = {}
@@ -736,16 +739,16 @@ SetHttpHandler(function(req, res)
   end
 
   -- Debug
-  if path == '/prop_placement/debug' or path == '/debug' then
+  if path == '/d4rk_prop_placement/debug' or path == '/debug' then
     if not Config.Debug then
       JsonResponse(res, 403, { error = 'Debug-Modus nicht aktiv. Config.Debug = true setzen.' }); return
     end
-    local dbCount  = MySQL.query.await('SELECT COUNT(*) as c FROM prop_placement_props')
-    local dbSample = MySQL.query.await('SELECT id, item_name, x, y, z FROM prop_placement_props LIMIT 5')
-    local hasGetAll   = type(GetAllPlacedProps) == 'function'
-    local hasRemoveFn = type(RemovePropFromServer) == 'function'
+    local dbCount          = MySQL.query.await('SELECT COUNT(*) as c FROM prop_placement_props')
+    local dbSample         = MySQL.query.await('SELECT id, item_name, x, y, z FROM prop_placement_props LIMIT 5')
+    local hasGetAll        = type(GetAllPlacedProps) == 'function'
+    local hasRemoveFn      = type(RemovePropFromServer) == 'function'
     local propsConfigCount = 0
-    local propsSample = {}
+    local propsSample      = {}
     if Config and Config.Props then
       for k, v in pairs(Config.Props) do
         propsConfigCount = propsConfigCount + 1
@@ -777,7 +780,7 @@ SetHttpHandler(function(req, res)
 
   -- FIX #7: Endpunkt ist GET (aus Dashboard-Kontext) – Kommentar zur Klarstellung.
   -- Für externe Nutzung empfehlen wir einen dedizierten API-Client mit dem X-Api-Key Header.
-  if path == '/prop_placement/props/remove' or path == '/props/remove' then
+  if path == '/d4rk_prop_placement/props/remove' or path == '/props/remove' then
     local propId = tonumber(query.id)
     if not propId then
       JsonResponse(res, 400, { error = 'id parameter required' }); return
@@ -803,14 +806,15 @@ SetHttpHandler(function(req, res)
   end
 
   -- Props Liste
-  if path == '/prop_placement/props' or path == '/props' then
+  if path == '/d4rk_prop_placement/props' or path == '/props' then
     local page     = math.max(1, tonumber(query.page) or 1)
     local pageSize = math.max(1, math.min(tonumber(query.pageSize) or 20, 100))
     local offset   = (page - 1) * pageSize
     local countR   = MySQL.query.await('SELECT COUNT(*) as total FROM prop_placement_props')
     local total    = countR and countR[1] and countR[1].total or 0
 
-    print(('[prop_placement][DEBUG] /props aufgerufen – DB-Count: %d | page: %d | pageSize: %d'):format(total, page, pageSize))
+    print(('[prop_placement][DEBUG] /props aufgerufen – DB-Count: %d | page: %d | pageSize: %d'):format(total, page,
+      pageSize))
 
     local rows = MySQL.query.await(
       'SELECT * FROM prop_placement_props ORDER BY id ASC LIMIT ? OFFSET ?', { pageSize, offset }
@@ -829,43 +833,64 @@ SetHttpHandler(function(req, res)
     local pageProps = {}
     for _, row in ipairs(rows) do
       table.insert(pageProps, {
-        id = row.id, itemName = row.item_name, model = row.model,
-        x = row.x, y = row.y, z = row.z, rotation = row.rotation,
-        ownerIdentifier = row.owner_identifier, persistent = row.persistent == 1,
+        id = row.id,
+        itemName = row.item_name,
+        model = row.model,
+        x = row.x,
+        y = row.y,
+        z = row.z,
+        rotation = row.rotation,
+        ownerIdentifier = row.owner_identifier,
+        persistent = row.persistent == 1,
         category = getCategory(row.item_name),
       })
     end
     local mapProps = {}
     for _, row in ipairs(allRows) do
       table.insert(mapProps, {
-        id = row.id, itemName = row.item_name, x = row.x, y = row.y, z = row.z,
-        category = getCategory(row.item_name), ownerIdentifier = row.owner_identifier,
+        id = row.id,
+        itemName = row.item_name,
+        x = row.x,
+        y = row.y,
+        z = row.z,
+        category = getCategory(row.item_name),
+        ownerIdentifier = row.owner_identifier,
       })
     end
     JsonResponse(res, 200, {
-      props = pageProps, all_map_props = mapProps, total = total, page = page,
-      totalPages = math.max(1, math.ceil(total / pageSize)), generated_at = os.time(),
+      props = pageProps,
+      all_map_props = mapProps,
+      total = total,
+      page = page,
+      totalPages = math.max(1, math.ceil(total / pageSize)),
+      generated_at = os.time(),
     }); return
   end
 
   -- Logs
-  if path == '/prop_placement/logs' or path == '/logs' then
+  if path == '/d4rk_prop_placement/logs' or path == '/logs' then
     local page               = math.max(1, tonumber(query.page) or 1)
     local pageSize           = Config.Logging.PageSize
     local offset             = (page - 1) * pageSize
     local conditions, params = {}, {}
     if query.action and query.action ~= '' then
-      table.insert(conditions, 'action = ?'); table.insert(params, query.action) end
+      table.insert(conditions, 'action = ?'); table.insert(params, query.action)
+    end
     if query.item and query.item ~= '' then
-      table.insert(conditions, 'item_name = ?'); table.insert(params, query.item) end
+      table.insert(conditions, 'item_name = ?'); table.insert(params, query.item)
+    end
     if query.identifier and query.identifier ~= '' then
-      table.insert(conditions, 'identifier = ?'); table.insert(params, query.identifier) end
+      table.insert(conditions, 'identifier = ?'); table.insert(params, query.identifier)
+    end
     if query.player and query.player ~= '' then
-      table.insert(conditions, 'player_name LIKE ?'); table.insert(params, '%' .. query.player .. '%') end
+      table.insert(conditions, 'player_name LIKE ?'); table.insert(params, '%' .. query.player .. '%')
+    end
     if query.from and query.from ~= '' then
-      table.insert(conditions, 'created_at >= ?'); table.insert(params, query.from) end
+      table.insert(conditions, 'created_at >= ?'); table.insert(params, query.from)
+    end
     if query.to and query.to ~= '' then
-      table.insert(conditions, 'created_at <= ?'); table.insert(params, query.to) end
+      table.insert(conditions, 'created_at <= ?'); table.insert(params, query.to)
+    end
     local where = #conditions > 0 and ('WHERE ' .. table.concat(conditions, ' AND ')) or ''
     local cp = {}; for _, v in ipairs(params) do table.insert(cp, v) end
     local cr = MySQL.query.await('SELECT COUNT(*) as total FROM prop_placement_logs ' .. where, cp)
@@ -876,12 +901,16 @@ SetHttpHandler(function(req, res)
       'SELECT * FROM prop_placement_logs ' .. where .. ' ORDER BY created_at DESC LIMIT ? OFFSET ?', dp
     ) or {}
     for _, entry in ipairs(logs) do
-      if entry.coords then local ok, d = pcall(json.decode, entry.coords); entry.coords = ok and d or entry.coords end
-      if entry.extra  then local ok, d = pcall(json.decode, entry.extra);  entry.extra  = ok and d or entry.extra  end
+      if entry.coords then
+        local ok, d = pcall(json.decode, entry.coords); entry.coords = ok and d or entry.coords
+      end
+      if entry.extra then
+        local ok, d = pcall(json.decode, entry.extra); entry.extra = ok and d or entry.extra
+      end
     end
     JsonResponse(res, 200, {
-      data       = logs,
-      pagination = { page = page, page_size = pageSize, total = total, total_pages = math.ceil(total / pageSize) },
+      data         = logs,
+      pagination   = { page = page, page_size = pageSize, total = total, total_pages = math.ceil(total / pageSize) },
       generated_at = os.time(),
     }); return
   end
@@ -889,16 +918,16 @@ SetHttpHandler(function(req, res)
   JsonResponse(res, 404, {
     error = 'Not Found',
     available = {
-      '/prop_placement/dashboard',
-      '/prop_placement/health',
-      '/prop_placement/stats',
-      '/prop_placement/props',
-      '/prop_placement/props/remove?id=X',
-      '/prop_placement/logs',
-      '/prop_placement/debug  (nur wenn Config.Debug = true)',
+      '/d4rk_prop_placement/dashboard',
+      '/d4rk_prop_placement/health',
+      '/d4rk_prop_placement/stats',
+      '/d4rk_prop_placement/props',
+      '/d4rk_prop_placement/props/remove?id=X',
+      '/d4rk_prop_placement/logs',
+      '/d4rk_prop_placement/debug  (nur wenn Config.Debug = true)',
     }
   })
 end)
 
 print('[prop_placement] HTTP API aktiv')
-print('[prop_placement] Dashboard: http://SERVER_IP:30120/prop_placement/dashboard')
+print('[prop_placement] Dashboard: http://SERVER_IP:30120/d4rk_prop_placement/dashboard')

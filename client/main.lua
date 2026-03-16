@@ -1,40 +1,30 @@
 --[[
     ╔══════════════════════════════════════════════════════╗
     ║           prop_placement – client/main.lua           ║
-    ║   Client-side Entities mit CreateObjectNoOffset      ║
+    ║   Client-side Spawning nach M-PropV2-Muster          ║
     ╚══════════════════════════════════════════════════════╝
-
-    ROOT CAUSE:
-    ────────────
-    syncAll feuert während des Ladebildschirms. Props werden
-    erstellt (DoesEntityExist = true), aber das Framework / die
-    Engine wirft beim playerSpawned-Event einen Teil der Entities
-    raus. Der Handle bleibt "gültig" – der Renderer zeigt nichts.
-
-    FIXES:
-    ──────
-    1. Sync erst NACH playerSpawned auslösen, nicht beim
-       Ressourcenstart (onClientResourceStart nur als Fallback
-       für späte Resource-Starts wenn Spieler bereits in der Welt).
-    2. RequestCollisionAtCoord vor jedem Spawn – stellt sicher
-       dass die Game-Welt an dieser Position geladen ist.
-    3. Post-Spawn-Check: nach dem Spawnen prüfen ob Alpha & LOD
-       korrekt gesetzt sind (detektiert "Zombie"-Entities).
-    4. Keepalive-Thread erkennt von der Engine gelöschte Entities.
-    5. NetworkSetEntityInvisibleToNetwork entfernt (verwirrt
-       Network-Manager bei lokalen Entities).
 ]]
 
-local placedProps       = {}
-local allPropData       = {}
+local placedProps       = {} -- [propId] = entity handle
+local allPropData       = {} -- [propId] = propData
 local propGrid          = {}
 local hasSynced         = false
 local syncInProgress    = false
 local isSyncing         = false
 local streamStillFrames = 0
 local forceStreamCheck  = false
--- FIX: Flag das anzeigt ob playerSpawned bereits gefeuert hat
 local playerHasSpawned  = false
+
+-- Editor-Mode (nur für Admins)
+local isEditorMode      = false
+local isAdmin           = false
+
+-- Decorator einmalig beim Start registrieren
+CreateThread(function()
+    if not DecorIsRegisteredAsType('PP_PROP_ID', 3) then
+        DecorRegister('PP_PROP_ID', 3)
+    end
+end)
 
 -- ─────────────────────────────────────────────────────────
 -- Hilfsfunktionen
@@ -44,13 +34,19 @@ local function DebugLog(msg)
     if Config.Debug then print('[prop_placement][CLIENT] ' .. tostring(msg)) end
 end
 
+-- Exakt wie M-PropV2: IsModelInCdimage + Wait(0), KEIN SetModelAsNoLongerNeeded
 local function LoadModel(model)
-    if HasModelLoaded(model) then return true end
-    RequestModel(model)
-    local t = 0
-    while not HasModelLoaded(model) do
-        Wait(100); t = t + 1
-        if t > 80 then return false end
+    local hash = (type(model) == 'number') and model or GetHashKey(model)
+    if not IsModelInCdimage(hash) then
+        DebugLog('Modell nicht in cdimage: ' .. tostring(model))
+        return false
+    end
+    if HasModelLoaded(hash) then return true end
+    RequestModel(hash)
+    local timeout = GetGameTimer() + 5000
+    while not HasModelLoaded(hash) do
+        Wait(0)
+        if GetGameTimer() > timeout then return false end
     end
     return true
 end
@@ -93,6 +89,8 @@ end
 
 -- ─────────────────────────────────────────────────────────
 -- Model-Preloading
+-- Kein SetModelAsNoLongerNeeded – sonst werden gespawnte
+-- Entities unsichtbar wenn das Modell entladen wird
 -- ─────────────────────────────────────────────────────────
 
 if Config.Preloading.Enabled then
@@ -100,14 +98,15 @@ if Config.Preloading.Enabled then
         Wait(Config.Preloading.Delay)
         local count = 0
         for _, cfg in pairs(Config.Props) do
-            local model = GetHashKey(cfg.model)
-            if not HasModelLoaded(model) then
-                RequestModel(model)
-                local t = 0
-                while not HasModelLoaded(model) and t < 50 do
-                    Wait(100); t = t + 1
+            local hash = GetHashKey(cfg.model)
+            if IsModelInCdimage(hash) and not HasModelLoaded(hash) then
+                RequestModel(hash)
+                local timeout = GetGameTimer() + 5000
+                while not HasModelLoaded(hash) do
+                    Wait(0)
+                    if GetGameTimer() > timeout then break end
                 end
-                SetModelAsNoLongerNeeded(model)
+                -- KEIN SetModelAsNoLongerNeeded hier!
                 count = count + 1
             end
         end
@@ -139,7 +138,8 @@ local function RegisterPropTarget(propId, entity, propData)
                 lib.notify({
                     title       = 'Prop #' .. propId,
                     description = ('Item: %s\nModel: %s\nBesitzer: %s'):format(
-                        propData.itemName, propData.model, propData.ownerIdentifier or '?'),
+                        propData.itemName, propData.model,
+                        propData.ownerIdentifier or '?'),
                     type        = 'inform',
                     duration    = 6000,
                 })
@@ -150,77 +150,51 @@ local function RegisterPropTarget(propId, entity, propData)
 end
 
 -- ─────────────────────────────────────────────────────────
--- Prop spawnen / entfernen
+-- Prop spawnen – M-PropV2-Muster
 -- ─────────────────────────────────────────────────────────
 
 local function SpawnProp(propData)
     local propId = propData.id
 
-    -- Bereits gespawnt und Entity noch gültig → nichts tun
     if placedProps[propId] and DoesEntityExist(placedProps[propId]) then return end
 
-    -- Alter ungültiger Handle → aufräumen
     if placedProps[propId] then
         pcall(function() exports.ox_target:removeLocalEntity(placedProps[propId]) end)
         placedProps[propId] = nil
     end
 
-    local model = GetHashKey(propData.model)
-    if not LoadModel(model) then
+    if not LoadModel(propData.model) then
         DebugLog('Modell nicht ladbar: ' .. propData.model); return
     end
 
-    -- FIX: Collision für diese Koordinaten anfordern bevor die Entity erstellt
-    -- wird. Ohne das kann die Engine eine "Zombie"-Entity erstellen die existiert
-    -- aber nicht gerendert wird weil die Welt an dieser Stelle noch nicht geladen ist.
+    -- Sicherstellen dass der Bereich an den Zielkoordinaten geladen ist
+    -- kurzes Wait damit die Engine nach RequestModel verarbeiten kann
     RequestCollisionAtCoord(propData.x, propData.y, propData.z)
-    local colWait = 0
-    while not HasCollisionLoadedAroundEntity(PlayerPedId()) and colWait < 2000 do
-        Wait(100); colWait = colWait + 100
-    end
+    Wait(50)
 
-    local entity = CreateObjectNoOffset(model,
+    -- M-PropV2: String übergeben, alle Parameter false
+    local entity = CreateObjectNoOffset(
+        propData.model,
         propData.x, propData.y, propData.z,
-        false, -- isNetwork: false = lokale Entity, nur für diesen Client
-        true,  -- netMissionEntity: true = am Script-Host gepinnt, verhindert
-        -- dass die Engine die Entity als "orphaned" betrachtet und löscht
-        false) -- doorFlag
+        false, false, false
+    )
 
     if not DoesEntityExist(entity) then
         DebugLog('Entity nicht erstellt: #' .. propId)
-        SetModelAsNoLongerNeeded(model)
+        -- Nur bei Fehler freigeben
+        SetModelAsNoLongerNeeded(GetHashKey(propData.model))
         return
     end
 
-    -- Entity dauerhaft halten
-    SetEntityAsMissionEntity(entity, true, true)
     SetEntityRotation(entity, 0.0, 0.0, propData.rotation, 2, true)
+    FreezeEntityPosition(entity, false) -- kurz unfreezen damit PlaceOnGround funktioniert
+    PlaceObjectOnGroundProperly(entity)
     FreezeEntityPosition(entity, true)
-    SetEntityCollision(entity, true, true)
-    SetEntityInvincible(entity, true)
-    SetEntityCanBeDamaged(entity, false)
-    SetEntityAlpha(entity, 255, false)
-    SetEntityLodDist(entity, 1000)
-
-    -- FIX: NetworkSetEntityInvisibleToNetwork ENTFERNT –
-    -- auf lokalen Entities (isNetwork=false) kann das den
-    -- Network-Manager verwirren und die Entity sofort löschen.
-
-    -- Post-Spawn-Check: Alpha prüfen um Zombie-Entities zu erkennen
-    Wait(0) -- einen Frame warten damit die Engine die Entity verarbeitet
-    local alpha = GetEntityAlpha(entity)
-    if alpha ~= 255 then
-        -- Engine hat Alpha überschrieben → Entity ist im falschen Zustand
-        -- Nochmals setzen
-        SetEntityAlpha(entity, 255, false)
-        DebugLog(('Prop #%d: Alpha-Fix angewendet (war %d)'):format(propId, alpha))
-    end
 
     placedProps[propId] = entity
     allPropData[propId] = propData
     AddToGrid(propId, propData.x, propData.y)
     RegisterPropTarget(propId, entity, propData)
-    SetModelAsNoLongerNeeded(model)
 
     DebugLog(('Prop #%d gespawnt bei %.1f / %.1f / %.1f'):format(
         propId, propData.x, propData.y, propData.z))
@@ -231,10 +205,9 @@ local function DespawnProp(propId)
     placedProps[propId] = nil
     if entity and DoesEntityExist(entity) then
         exports.ox_target:removeLocalEntity(entity)
-        SetEntityInvincible(entity, false)
-        SetEntityCanBeDamaged(entity, true)
-        FreezeEntityPosition(entity, false)
-        SetEntityAsMissionEntity(entity, false, false)
+        if DecorExistOn(entity, 'PP_PROP_ID') then
+            DecorSetInt(entity, 'PP_PROP_ID', 0)
+        end
         DeleteEntity(entity)
         DebugLog('Prop #' .. propId .. ' despawnt.')
     end
@@ -244,10 +217,9 @@ local function ClearAllLocalProps()
     for id, entity in pairs(placedProps) do
         if DoesEntityExist(entity) then
             exports.ox_target:removeLocalEntity(entity)
-            SetEntityInvincible(entity, false)
-            SetEntityCanBeDamaged(entity, true)
-            FreezeEntityPosition(entity, false)
-            SetEntityAsMissionEntity(entity, false, false)
+            if DecorExistOn(entity, 'PP_PROP_ID') then
+                DecorSetInt(entity, 'PP_PROP_ID', 0)
+            end
             DeleteEntity(entity)
         end
     end
@@ -257,7 +229,76 @@ local function ClearAllLocalProps()
 end
 
 -- ─────────────────────────────────────────────────────────
--- Keepalive-Thread
+-- Editor-Mode Thread (nach M-PropV2)
+-- Nur für Admins – zeigt Linie + Marker zum nächsten Prop
+-- ─────────────────────────────────────────────────────────
+
+CreateThread(function()
+    local sleep         = 500
+    local lastClosestId = nil
+    while true do
+        sleep = 500
+
+        if isEditorMode and isAdmin then
+            sleep             = 0
+            local ped         = PlayerPedId()
+            local pPos        = GetEntityCoords(ped)
+
+            local closest     = nil
+            local closestDist = 10.0
+            local closestId   = nil
+
+            for propId, entity in pairs(placedProps) do
+                if DoesEntityExist(entity) then
+                    local dist = #(pPos - GetEntityCoords(entity))
+                    if dist < closestDist then
+                        closest     = entity
+                        closestDist = dist
+                        closestId   = propId
+                    end
+                end
+            end
+
+            if closest then
+                local cPos = GetEntityCoords(closest)
+                local pd   = allPropData[closestId]
+
+                DrawLine(pPos.x, pPos.y, pPos.z, cPos.x, cPos.y, cPos.z, 0, 255, 255, 180)
+
+                local min, max = GetModelDimensions(GetEntityModel(closest))
+                local topZ = cPos.z + max.z + 0.4
+                DrawMarker(2, cPos.x, cPos.y, topZ, 0.0, 0.0, 0.0, 0.0, 180.0, 0.0,
+                    0.25, 0.25, 0.25, 0, 200, 255, 200, true, true, 2)
+
+                -- FIX: TextUI nur updaten wenn sich das nächste Prop ändert
+                -- (nicht jeden Frame – würde NUI/CEF 60-144x/s aufrufen → FPS-Drop)
+                if lastClosestId ~= closestId then
+                    local label = pd and pd.itemName or ('Prop #' .. tostring(closestId))
+                    lib.showTextUI(
+                        ('🧱 **%s** | #%d'):format(label, closestId),
+                        { position = 'top-center', icon = 'fas fa-cube' }
+                    )
+                    lastClosestId = closestId
+                end
+            else
+                if lib.isTextUIOpen() then
+                    lib.hideTextUI()
+                    lastClosestId = nil
+                end
+            end
+        else
+            if lib.isTextUIOpen() then
+                lib.hideTextUI()
+                lastClosestId = nil
+            end
+        end
+
+        Wait(sleep)
+    end
+end)
+
+-- ─────────────────────────────────────────────────────────
+-- Keepalive
 -- ─────────────────────────────────────────────────────────
 
 CreateThread(function()
@@ -267,15 +308,15 @@ CreateThread(function()
             local count = 0
             for propId, entity in pairs(placedProps) do
                 if not DoesEntityExist(entity) then
-                    placedProps[propId] = nil
-                    count = count + 1
-                    DebugLog(('Keepalive: Prop #%d fehlt, wird neu erstellt'):format(propId))
+                    local pd = allPropData[propId]
+                    if pd and IsModelInCdimage(GetHashKey(pd.model)) then
+                        placedProps[propId] = nil
+                        count = count + 1
+                        DebugLog(('Keepalive: Prop #%d fehlt, wird neu erstellt'):format(propId))
+                    end
                 end
             end
-            if count > 0 then
-                forceStreamCheck = true
-                DebugLog(('Keepalive: %d Props neu eingeplant'):format(count))
-            end
+            if count > 0 then forceStreamCheck = true end
         end
     end
 end)
@@ -304,7 +345,8 @@ if Config.Streaming.Enabled then
 
             if moved < 2.0 then
                 streamStillFrames = streamStillFrames + 1
-                checkInterval     = math.min(10000, Config.Streaming.CheckInterval + streamStillFrames * 500)
+                checkInterval     = math.min(10000,
+                    Config.Streaming.CheckInterval + streamStillFrames * 500)
             else
                 streamStillFrames = 0
                 checkInterval     = Config.Streaming.CheckInterval
@@ -313,7 +355,9 @@ if Config.Streaming.Enabled then
 
             local toCheck = {}
             if Config.Grid.Enabled then
-                for propId in pairs(GetNearbyPropIds(px, py)) do toCheck[propId] = true end
+                for propId in pairs(GetNearbyPropIds(px, py)) do
+                    toCheck[propId] = true
+                end
             end
             for propId in pairs(placedProps) do toCheck[propId] = true end
             if not Config.Grid.Enabled then
@@ -324,7 +368,8 @@ if Config.Streaming.Enabled then
                 for propId in pairs(toCheck) do
                     local pd = allPropData[propId]
                     if pd then
-                        local dist    = #(vector3(px, py, playerPos.z) - vector3(pd.x, pd.y, pd.z))
+                        local dist    = #(vector3(px, py, playerPos.z) -
+                            vector3(pd.x, pd.y, pd.z))
                         local entity  = placedProps[propId]
                         local spawned = entity and DoesEntityExist(entity)
                         if not spawned and dist <= Config.Streaming.SpawnRadius then
@@ -346,7 +391,12 @@ end
 AddEventHandler('ox_inventory:closedInventory', function()
     if IsCurrentlyPlacing() then
         CancelPlacementExternal()
-        lib.notify({ title = 'Abgebrochen', description = 'Platzierung abgebrochen.', type = 'inform', duration = 2000 })
+        lib.notify({
+            title = 'Abgebrochen',
+            description = 'Platzierung abgebrochen.',
+            type = 'inform',
+            duration = 2000
+        })
     end
 end)
 
@@ -362,27 +412,11 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
     end
 
     CreateThread(function()
-        -- FIX: Warten bis playerSpawned gefeuert hat UND die Welt geladen ist.
-        -- Props die vor playerSpawned erstellt werden können vom Framework
-        -- beim Spawn-Event gelöscht werden.
-        local waitTime = 0
-        while not playerHasSpawned and waitTime < 15000 do
-            Wait(200); waitTime = waitTime + 200
-        end
-
-        -- Zusätzlich warten bis gültige Position vorhanden
         local playerPos = GetEntityCoords(PlayerPedId())
-        waitTime = 0
+        local waitTime  = 0
         while #playerPos < 1.0 and waitTime < 8000 do
             Wait(300); waitTime = waitTime + 300
             playerPos = GetEntityCoords(PlayerPedId())
-        end
-
-        -- Collision sicherstellen
-        local ped = PlayerPedId()
-        waitTime = 0
-        while not HasCollisionLoadedAroundEntity(ped) and waitTime < 5000 do
-            Wait(200); waitTime = waitTime + 200; ped = PlayerPedId()
         end
 
         local spawnCount = 0
@@ -394,7 +428,7 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
             if not Config.Streaming.Enabled or dist <= Config.Streaming.SpawnRadius then
                 SpawnProp(propData)
                 spawnCount = spawnCount + 1
-                Wait(10)
+                Wait(0)
             else
                 skipCount = skipCount + 1
             end
@@ -404,7 +438,8 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
         if skipCount > 0 then forceStreamCheck = true end
         isSyncing = false
 
-        DebugLog(('syncAll abgeschlossen: %d gespawnt, %d per Streaming/Retry'):format(spawnCount, skipCount))
+        DebugLog(('syncAll abgeschlossen: %d gespawnt, %d außerhalb Radius'):format(
+            spawnCount, skipCount))
     end)
 end)
 
@@ -431,14 +466,22 @@ end)
 RegisterNetEvent('prop_placement:startPlacing', function(itemName)
     local propConfig = Config.Props[itemName]
     if not propConfig then
-        lib.notify({ title = 'Fehler', description = 'Unbekannter Prop-Typ: ' .. itemName, type = 'error' }); return
+        lib.notify({
+            title = 'Fehler',
+            description = 'Unbekannter Prop-Typ: ' .. itemName,
+            type = 'error'
+        }); return
     end
     StartPropPlacement(itemName, propConfig)
 end)
 
 RegisterNetEvent('prop_placement:receivePropList', function(list, filterName)
     if #list == 0 then
-        lib.notify({ title = 'Prop-Liste', description = 'Keine Props gefunden.', type = 'inform' }); return
+        lib.notify({
+            title = 'Prop-Liste',
+            description = 'Keine Props gefunden.',
+            type = 'inform'
+        }); return
     end
     local options = {}
     table.sort(list, function(a, b) return a.id < b.id end)
@@ -453,10 +496,10 @@ RegisterNetEvent('prop_placement:receivePropList', function(list, filterName)
             onSelect    = function()
                 CreateThread(function()
                     local confirmed = lib.alertDialog({
-                        header   = 'Prop #' .. capturedProp.id .. ' entfernen?',
-                        content  = capturedProp.itemName .. ' dauerhaft löschen?',
+                        header = 'Prop #' .. capturedProp.id .. ' entfernen?',
+                        content = capturedProp.itemName .. ' dauerhaft löschen?',
                         centered = true,
-                        cancel   = true,
+                        cancel = true,
                     })
                     if confirmed == 'confirm' then
                         TriggerServerEvent('prop_placement:remove', capturedProp.id)
@@ -474,6 +517,8 @@ RegisterNetEvent('prop_placement:receivePropList', function(list, filterName)
 end)
 
 RegisterNetEvent('prop_placement:openAdminMenu', function()
+    isAdmin          = true -- Wenn der Server das Menü schickt, ist der Spieler Admin
+
     local categories = {}
     local catItems   = {}
     for itemName, cfg in pairs(Config.Props) do
@@ -486,6 +531,32 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
     table.sort(categories)
 
     local options = {}
+
+    -- Editor-Mode Toggle
+    table.insert(options, {
+        title       = ('🔍 Editor-Mode: %s'):format(isEditorMode and '**AN**' or 'AUS'),
+        description = isEditorMode
+            and 'Zeigt nächsten Prop mit Linie & Marker'
+            or 'Aktivieren um Props visuell zu markieren',
+        icon        = isEditorMode and 'toggle-on' or 'toggle-off',
+        onSelect    = function()
+            isEditorMode = not isEditorMode
+            if not isEditorMode and lib.isTextUIOpen() then
+                lib.hideTextUI()
+            end
+            lib.notify({
+                title       = 'Editor-Mode',
+                description = isEditorMode and 'Aktiviert' or 'Deaktiviert',
+                type        = 'inform',
+                duration    = 2000,
+            })
+            -- Menü neu öffnen damit Toggle-Status aktualisiert wird
+            TriggerServerEvent('prop_placement:requestAdminMenu')
+        end,
+    })
+
+    table.insert(options, { title = '─────────────────', disabled = true })
+
     for _, cat in ipairs(categories) do
         local items   = catItems[cat]
         local catName = cat
@@ -499,14 +570,26 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
                 for _, entry in ipairs(items) do
                     local itemName = entry.itemName
                     local cfg      = entry.cfg
-                    local flags    = (cfg.adminOnly and '🔒 ' or '') .. (cfg.persistent and '💾 ' or '')
+                    local flags    = (cfg.adminOnly and '🔒 ' or '') ..
+                        (cfg.persistent and '💾 ' or '')
                     table.insert(subOptions, {
                         title       = flags .. cfg.label,
                         description = ('Model: %s | %sg'):format(cfg.model, cfg.weight or 1000),
                         onSelect    = function()
                             local input = lib.inputDialog('Prop-Item geben', {
-                                { type = 'number', label = 'Server-ID des Spielers', required = true, min = 1 },
-                                { type = 'number', label = 'Anzahl',                 default = 1,     min = 1, max = 99 },
+                                {
+                                    type = 'number',
+                                    label = 'Server-ID des Spielers',
+                                    required = true,
+                                    min = 1
+                                },
+                                {
+                                    type = 'number',
+                                    label = 'Anzahl',
+                                    default = 1,
+                                    min = 1,
+                                    max = 99
+                                },
                             })
                             if input and input[1] then
                                 TriggerServerEvent('prop_placement:adminGive',
@@ -516,12 +599,12 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
                     })
                 end
                 lib.registerContext({
-                    id      = 'pp_cat_' .. catName,
+                    id      = 'pp_cat_' .. catName:gsub('%s+', '_'),
                     title   = ('🧱 %s'):format(catName),
                     menu    = 'prop_placement_admin_menu',
                     options = subOptions,
                 })
-                lib.showContext('pp_cat_' .. catName)
+                lib.showContext('pp_cat_' .. catName:gsub('%s+', '_'))
             end,
         })
     end
@@ -563,85 +646,110 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
         onSelect    = function()
             CreateThread(function()
                 local confirmed = lib.alertDialog({
-                    header   = 'Alle Props löschen?',
-                    content  = 'Diese Aktion löscht alle Props dauerhaft.',
+                    header = 'Alle Props löschen?',
+                    content = 'Diese Aktion löscht alle Props dauerhaft.',
                     centered = true,
-                    cancel   = true,
+                    cancel = true,
                 })
-                if confirmed == 'confirm' then TriggerServerEvent('prop_placement:adminClearAll') end
+                if confirmed == 'confirm' then
+                    TriggerServerEvent('prop_placement:adminClearAll')
+                end
             end)
         end,
     })
 
-    lib.registerContext({ id = 'prop_placement_admin_menu', title = '🧱 Prop Placement – Admin', options = options })
+    lib.registerContext({
+        id      = 'prop_placement_admin_menu',
+        title   = '🧱 Prop Placement – Admin',
+        options = options
+    })
     lib.showContext('prop_placement_admin_menu')
 end)
 
 -- ─────────────────────────────────────────────────────────
--- Initialisierung
+-- Initialisierung – exakt wie M-PropV2
 -- ─────────────────────────────────────────────────────────
+-- Kein playerSpawned, kein Framework-Event, kein Collision-Check.
+-- Einfach 1 Sekunde warten, Props per Callback holen,
+-- in Grid speichern. Streaming-Thread spawnt den Rest automatisch.
 
-local function DoSync()
-    if hasSynced or syncInProgress then return end
-    syncInProgress = true
-
-    local ped      = PlayerPedId()
-    local waited   = 0
-    repeat
-        Wait(500); waited = waited + 500; ped = PlayerPedId()
-    until HasCollisionLoadedAroundEntity(ped) or waited >= 10000
-    Wait(500)
-
-    hasSynced      = true
-    syncInProgress = false
-    TriggerServerEvent('prop_placement:requestSync')
+local function LoadProps()
+    local propList = lib.callback.await('prop_placement:getProps', false) or {}
+    for _, propData in ipairs(propList) do
+        allPropData[propData.id] = propData
+        if Config.Grid.Enabled then AddToGrid(propData.id, propData.x, propData.y) end
+    end
+    DebugLog(('%d Props in Grid geladen'):format(#propList))
+    forceStreamCheck = true
+    hasSynced = true
+    return #propList
 end
 
--- FIX: playerSpawned ist der primäre Trigger.
--- Props werden ERST erstellt nachdem der Spieler vollständig gespawnt
--- ist – so kann das Framework sie nicht mehr beim Spawn-Event löschen.
-AddEventHandler('playerSpawned', function()
-    playerHasSpawned = true
-    CreateThread(function()
-        DoSync()
-        DebugLog('Sync via playerSpawned')
-    end)
+-- Beim Start: 1 Sekunde warten dann Props laden (M-PropV2-Pattern)
+CreateThread(function()
+    Wait(1000)
+    LoadProps()
 end)
 
--- Fallback: Falls die Ressource gestartet wird während der Spieler
--- bereits in der Welt ist (z.B. Ressource reload via Admin)
+-- Bei Resource-Reload (restart prop_placement)
 AddEventHandler('onClientResourceStart', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
+    ClearAllLocalProps()
     hasSynced        = false
     syncInProgress   = false
     forceStreamCheck = false
-    -- playerHasSpawned NICHT zurücksetzen – der Spieler ist bereits spawned
-
     CreateThread(function()
-        -- Kurz warten damit playerSpawned ggf. noch feuern kann
         Wait(1000)
-        if playerHasSpawned then
-            -- Spieler ist bereits gespawnt → sofort sync
-            DoSync()
-            DebugLog('Sync via onClientResourceStart (Spieler bereits gespawnt)')
-        else
-            -- Spieler noch nicht gespawnt → playerSpawned übernimmt
-            DebugLog('onClientResourceStart: warte auf playerSpawned für Sync')
-        end
+        LoadProps()
+        DebugLog('Sync via onClientResourceStart')
     end)
 end)
 
-AddEventHandler('baseevents:onPlayerDied', function() CancelPlacementExternal() end)
+AddEventHandler('baseevents:onPlayerDied', function()
+    CancelPlacementExternal()
+    if isEditorMode then
+        isEditorMode = false
+        if lib.isTextUIOpen() then lib.hideTextUI() end
+    end
+end)
 
 AddEventHandler('onClientResourceStop', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
     CancelPlacementExternal()
+    if lib.isTextUIOpen() then lib.hideTextUI() end
     ClearAllLocalProps()
 end)
 
 -- ─────────────────────────────────────────────────────────
 -- Commands
 -- ─────────────────────────────────────────────────────────
+
+-- Test 2: DB-Props NEBEN dem Spieler spawnen (nicht an DB-Koordinaten)
+-- Wenn das funktioniert → Problem sind die gespeicherten Koordinaten
+RegisterCommand('testspawnhere', function()
+    local propList = lib.callback.await('prop_placement:getProps', false) or {}
+    if #propList == 0 then
+        print('[testspawnhere] Keine Props in DB!'); return
+    end
+
+    local pos = GetEntityCoords(PlayerPedId())
+
+    for i, propData in ipairs(propList) do
+        local hash = GetHashKey(propData.model)
+        if IsModelInCdimage(hash) then
+            RequestModel(hash)
+            while not HasModelLoaded(hash) do Wait(0) end
+            -- Neben dem Spieler spawnen, jeweils 2m versetzt
+            local obj = CreateObjectNoOffset(
+                propData.model,
+                pos.x + (i * 2.0), pos.y, pos.z,
+                false, false, false
+            )
+            print(('[testspawnhere] #%d | %s | Exists: %s'):format(
+                propData.id, propData.model, tostring(DoesEntityExist(obj))))
+        end
+    end
+end, false)
 
 RegisterCommand('propadmin', function()
     TriggerServerEvent('prop_placement:requestAdminMenu')
@@ -670,8 +778,8 @@ if Config.Debug then
         for _ in pairs(propGrid) do cells = cells + 1 end
         lib.notify({
             title       = 'Prop Debug',
-            description = ('Gespawnt: %d / Bekannt: %d / Grid-Zellen: %d\nplayerHasSpawned: %s'):format(
-                spawned, total, cells, tostring(playerHasSpawned)),
+            description = ('Gespawnt: %d / Bekannt: %d / Grid: %d\nEditor: %s'):format(
+                spawned, total, cells, tostring(isEditorMode)),
             type        = 'inform',
         })
     end, false)

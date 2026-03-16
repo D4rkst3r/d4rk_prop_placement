@@ -1,12 +1,18 @@
 --[[
     ╔══════════════════════════════════════════════════════╗
     ║           prop_placement – server/main.lua           ║
-    ║   Koordinaten-basiert – Entities client-seitig       ║
+    ║   Server: nur Daten – Client spawnt lokal            ║
     ╚══════════════════════════════════════════════════════╝
+
+    ARCHITEKTUR (nach M-PropV2):
+    ─────────────────────────────
+    Der Server speichert nur Koordinaten in der DB.
+    Keine server-seitigen Entities.
+    Der Client spawnt Props lokal mit CreateObjectNoOffset(false,false,false).
+    OneSync wird nicht benötigt.
 ]]
 
-local placedProps     = {}
-local nextId          = 1
+local placedProps     = {} -- [dbId] = propData (nur Daten, keine Entities)
 local cooldowns       = {}
 local playerPropCount = {}
 local dbReady         = false
@@ -42,13 +48,6 @@ local function DecrementPlayerProps(identifier)
     playerPropCount[identifier] = count > 0 and count or nil
 end
 
-local function GetPropList()
-    local list = {}
-    for _, prop in pairs(placedProps) do table.insert(list, prop) end
-    return list
-end
-
--- FIX #2: os.clock() durch GetGameTimer() ersetzt (os.clock = CPU-Zeit, nicht Wanduhr)
 local function IsOnCooldown(identifier)
     if Config.PlacementCooldown <= 0 then return false end
     local last = cooldowns[identifier]
@@ -60,10 +59,18 @@ local function SetCooldown(identifier)
     cooldowns[identifier] = GetGameTimer()
 end
 
+local function GetPropList()
+    local list = {}
+    for _, prop in pairs(placedProps) do table.insert(list, prop) end
+    return list
+end
+
 local function RemovePlayerProps(identifier)
     local removedIds = {}
     for id, prop in pairs(placedProps) do
-        if prop.ownerIdentifier == identifier then table.insert(removedIds, id) end
+        if prop.ownerIdentifier == identifier then
+            table.insert(removedIds, id)
+        end
     end
     if #removedIds == 0 then return 0 end
     for _, id in ipairs(removedIds) do
@@ -73,7 +80,8 @@ local function RemovePlayerProps(identifier)
     playerPropCount[identifier] = nil
     local placeholders = {}
     for i = 1, #removedIds do placeholders[i] = '?' end
-    MySQL.query('DELETE FROM prop_placement_props WHERE id IN (' .. table.concat(placeholders, ',') .. ')', removedIds)
+    MySQL.query('DELETE FROM prop_placement_props WHERE id IN (' ..
+        table.concat(placeholders, ',') .. ')', removedIds)
     return #removedIds
 end
 
@@ -82,26 +90,28 @@ end
 -- ─────────────────────────────────────────────────────────
 
 CreateThread(function()
-    local result = MySQL.query.await('SELECT * FROM prop_placement_props WHERE persistent = 1 ORDER BY id ASC')
+    local result = MySQL.query.await(
+        'SELECT * FROM prop_placement_props WHERE persistent = 1 ORDER BY id ASC'
+    )
     if result then
         for _, row in ipairs(result) do
-            local id        = row.id
-            local owner     = row.owner_identifier
-            placedProps[id] = {
-                id              = id,
+            placedProps[row.id] = {
+                id              = row.id,
                 itemName        = row.item_name,
                 model           = row.model,
                 x               = row.x,
                 y               = row.y,
                 z               = row.z,
                 rotation        = row.rotation,
-                ownerIdentifier = owner,
+                ownerIdentifier = row.owner_identifier,
                 persistent      = true,
             }
-            if owner then playerPropCount[owner] = (playerPropCount[owner] or 0) + 1 end
-            if id >= nextId then nextId = id + 1 end
+            if row.owner_identifier then
+                playerPropCount[row.owner_identifier] =
+                    (playerPropCount[row.owner_identifier] or 0) + 1
+            end
         end
-        print(('[prop_placement] %d persistente Props aus DB geladen.'):format(#result))
+        print(('[prop_placement] %d Props aus DB geladen.'):format(#result))
     end
 
     dbReady = true
@@ -115,16 +125,21 @@ CreateThread(function()
     -- d4rk_livemap
     CreateThread(function()
         Wait(2000)
-        local colorMap = { Allgemein = '#60a5fa', Polizei = '#f87171', Baustelle = '#fbbf24', Admin = '#c084fc' }
+        local colorMap = {
+            Allgemein = '#60a5fa',
+            Polizei = '#f87171',
+            Baustelle = '#fbbf24',
+            Admin = '#c084fc'
+        }
         local loaded = 0
         for id, prop in pairs(placedProps) do
             pcall(function()
                 local cfg = Config.Props[prop.itemName]
                 exports.d4rk_livemap:AddMarker({
-                    id     = 'prop_' .. id,
-                    x      = prop.x,
-                    y      = prop.y,
-                    z      = prop.z,
+                    id = 'prop_' .. id,
+                    x = prop.x,
+                    y = prop.y,
+                    z = prop.z,
                     label  = (cfg and cfg.label or prop.itemName) .. ' #' .. id,
                     color  = colorMap[(cfg and cfg.category)] or '#00d4aa',
                     icon   = 'box',
@@ -181,10 +196,25 @@ AddEventHandler('playerDropped', function()
     cooldowns[identifier] = nil
     if Config.RemoveOnDisconnect then
         local removed = RemovePlayerProps(identifier)
-        if removed > 0 then DebugLog(('Spieler %s – %d Props entfernt.'):format(identifier, removed)) end
+        if removed > 0 then
+            DebugLog(('Spieler %s – %d Props entfernt.'):format(identifier, removed))
+        end
     end
 end)
 
+-- ─────────────────────────────────────────────────────────
+-- lib.callback für Client-Sync
+-- ─────────────────────────────────────────────────────────
+
+-- Ersetzt TriggerServerEvent('prop_placement:requestSync')
+-- Callback blockiert den Client bis der Server garantiert geantwortet hat
+lib.callback.register('prop_placement:getProps', function(source)
+    -- Warten bis DB fertig geladen ist
+    while not dbReady do Wait(100) end
+    return GetPropList()
+end)
+
+-- Legacy Event-Handler bleibt als Fallback
 RegisterNetEvent('prop_placement:requestSync', function()
     local src = source
     if not dbReady then
@@ -193,7 +223,7 @@ RegisterNetEvent('prop_placement:requestSync', function()
         return
     end
     TriggerClientEvent('prop_placement:syncAll', src, GetPropList())
-    DebugLog('Sync → Spieler ' .. src .. ' (' .. #GetPropList() .. ' Props)')
+    DebugLog(('Sync → Spieler %d (%d Props)'):format(src, #GetPropList()))
 end)
 
 RegisterNetEvent('prop_placement:place', function(itemName, posData)
@@ -221,7 +251,8 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
         end
     end
     if not IsAdmin(src) then
-        local distance = #(GetEntityCoords(GetPlayerPed(src)) - vector3(posData.x, posData.y, posData.z))
+        local distance = #(GetEntityCoords(GetPlayerPed(src)) -
+            vector3(posData.x, posData.y, posData.z))
         if distance > Config.Placement.MaxDistance * 1.5 then
             lib.notify(src, { title = 'Zu weit entfernt', type = 'error' }); return
         end
@@ -236,32 +267,20 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
 
     SetCooldown(identifier)
 
-    -- FIX #12: ID nicht mehr manuell übergeben – MySQL AUTO_INCREMENT bestimmt die ID.
-    -- Für persistente Props: erst DB-Insert, dann ID aus DB verwenden.
-    -- Für nicht-persistente Props: weiterhin nextId als In-Memory-Zähler.
-    local propId
-    local propData
+    -- DB-Insert → MySQL vergibt die ID
+    local dbId = MySQL.insert.await(
+        'INSERT INTO prop_placement_props (item_name,model,x,y,z,rotation,owner_identifier,owner_job,persistent) VALUES (?,?,?,?,?,?,?,?,?)',
+        { itemName, propConfig.model, posData.x, posData.y, posData.z,
+            posData.rotation or 0.0, identifier, nil, propConfig.persistent and 1 or 0 }
+    )
 
-    if propConfig.persistent then
-        local dbId = MySQL.insert.await(
-            'INSERT INTO prop_placement_props (item_name,model,x,y,z,rotation,owner_identifier,owner_job,persistent) VALUES (?,?,?,?,?,?,?,?,?)',
-            { itemName, propConfig.model, posData.x, posData.y, posData.z, posData.rotation or 0.0, identifier, nil, 1 }
-        )
-        if not dbId or dbId <= 0 then
-            -- DB-Insert fehlgeschlagen – Item zurückgeben und abbrechen
-            exports.ox_inventory:AddItem(src, itemName, 1)
-            lib.notify(src, { title = 'Fehler', description = 'Datenbankfehler beim Platzieren.', type = 'error' })
-            return
-        end
-        propId = dbId
-        -- nextId anpassen damit In-Memory-IDs nie mit DB-IDs kollidieren
-        if dbId >= nextId then nextId = dbId + 1 end
-    else
-        propId = nextId; nextId = nextId + 1
+    if not dbId or dbId <= 0 then
+        exports.ox_inventory:AddItem(src, itemName, 1)
+        lib.notify(src, { title = 'Fehler', description = 'Datenbankfehler.', type = 'error' }); return
     end
 
-    propData = {
-        id              = propId,
+    local propData = {
+        id              = dbId,
         itemName        = itemName,
         model           = propConfig.model,
         x               = posData.x,
@@ -271,25 +290,38 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
         ownerIdentifier = identifier,
         persistent      = propConfig.persistent,
     }
-    placedProps[propId] = propData
+
+    placedProps[dbId] = propData
     IncrementPlayerProps(identifier)
 
+    -- Alle Clients informieren damit sie den Prop lokal spawnen
     TriggerClientEvent('prop_placement:propPlaced', -1, propData)
-    lib.notify(src, { title = 'Platziert! ✅', description = propConfig.label .. ' platziert.', type = 'success' })
-    LogPropAction('place', src, identifier, GetPlayerName(src) or 'Unbekannt', propId, itemName, propConfig.model,
+
+    lib.notify(src, {
+        title       = 'Platziert! ✅',
+        description = propConfig.label .. ' platziert.',
+        type        = 'success'
+    })
+    LogPropAction('place', src, identifier, GetPlayerName(src) or 'Unbekannt',
+        dbId, itemName, propConfig.model,
         { x = posData.x, y = posData.y, z = posData.z, rotation = posData.rotation }, {})
 
     pcall(function()
+        local colorMap = {
+            Allgemein = '#60a5fa',
+            Polizei = '#f87171',
+            Baustelle = '#fbbf24',
+            Admin = '#c084fc'
+        }
         exports.d4rk_livemap:AddMarker({
-            id     = 'prop_' .. propId,
-            x      = posData.x,
-            y      = posData.y,
-            z      = posData.z,
-            label  = propConfig.label .. ' #' .. propId,
-            color  = ({ Allgemein = '#60a5fa', Polizei = '#f87171', Baustelle = '#fbbf24', Admin = '#c084fc' })
-                [propConfig.category] or '#00d4aa',
-            icon   = 'box',
-            group  = propConfig.category or 'Props',
+            id = 'prop_' .. dbId,
+            x = posData.x,
+            y = posData.y,
+            z = posData.z,
+            label = propConfig.label .. ' #' .. dbId,
+            color = colorMap[propConfig.category] or '#00d4aa',
+            icon = 'box',
+            group = propConfig.category or 'Props',
             source = 'prop_placement',
         })
     end)
@@ -306,10 +338,6 @@ RegisterNetEvent('prop_placement:remove', function(propId)
     local isOwner    = prop.ownerIdentifier == identifier
     local admin      = IsAdmin(src)
     local propConfig = Config.Props[prop.itemName]
-
-    -- FIX #5: ownerOnly = false bedeutet, dass JEDER Spieler diesen Prop entfernen kann
-    -- (gewollt für Polizei-Props wie Kegel/Absperrungen – kein Item-Rückgabe-Exploit,
-    --  da das Item an den Entfernenden geht, nicht an den ursprünglichen Besitzer).
     local ownerOnly  = true
     if propConfig ~= nil and propConfig.ownerOnly ~= nil then
         ownerOnly = propConfig.ownerOnly
@@ -330,8 +358,10 @@ RegisterNetEvent('prop_placement:remove', function(propId)
         description = (propConfig and propConfig.label or prop.itemName) .. ' ins Inventar.',
         type        = 'success'
     })
-    LogPropAction('remove', src, identifier, GetPlayerName(src) or 'Unbekannt', propId, prop.itemName, prop.model,
-        { x = prop.x, y = prop.y, z = prop.z, rotation = prop.rotation }, { owner = prop.ownerIdentifier })
+    LogPropAction('remove', src, identifier, GetPlayerName(src) or 'Unbekannt',
+        propId, prop.itemName, prop.model,
+        { x = prop.x, y = prop.y, z = prop.z, rotation = prop.rotation },
+        { owner = prop.ownerIdentifier })
 
     pcall(function() exports.d4rk_livemap:RemoveMarker('prop_' .. propId) end)
 end)
@@ -343,31 +373,37 @@ RegisterNetEvent('prop_placement:adminGive', function(targetId, itemName, amount
     if not propConfig or not GetPlayerName(targetId) then return end
     amount = math.max(1, math.min(amount or 1, 99))
     exports.ox_inventory:AddItem(targetId, itemName, amount)
-    lib.notify(src,
-        { title = 'Item gegeben', description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId), type =
-        'success' })
-    lib.notify(targetId,
-        { title = 'Item erhalten', description = ('%dx %s erhalten.'):format(amount, propConfig.label), type = 'success' })
-    LogPropAction('admin_give', src, GetIdentifier(src), GetPlayerName(src) or 'Unbekannt', nil, itemName, nil, nil,
-        { target_id = targetId, amount = amount })
+    lib.notify(src, {
+        title = 'Item gegeben',
+        description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId),
+        type = 'success'
+    })
+    lib.notify(targetId, {
+        title = 'Item erhalten',
+        description = ('%dx %s erhalten.'):format(amount, propConfig.label),
+        type = 'success'
+    })
+    LogPropAction('admin_give', src, GetIdentifier(src), GetPlayerName(src) or 'Unbekannt',
+        nil, itemName, nil, nil, { target_id = targetId, amount = amount })
 end)
 
 RegisterNetEvent('prop_placement:adminClearAll', function()
     local src = source
     if not IsAdmin(src) then return end
     local count = 0
-    local ids = {}
-    for id in pairs(placedProps) do table.insert(ids, id) end
-    for _, id in ipairs(ids) do
+    for id in pairs(placedProps) do
         placedProps[id] = nil; count = count + 1
     end
     playerPropCount = {}
     MySQL.query('DELETE FROM prop_placement_props')
     TriggerClientEvent('prop_placement:syncAll', -1, {})
-    lib.notify(src, { title = 'Props gelöscht', description = count .. ' Props entfernt.', type = 'success' })
-    LogPropAction('admin_clear', src, GetIdentifier(src), GetPlayerName(src) or 'Konsole', nil, nil, nil, nil,
-        { deleted_count = count })
-    print(('[prop_placement] Admin %d löschte alle %d Props.'):format(src, count))
+    lib.notify(src, {
+        title = 'Props gelöscht',
+        description = count .. ' Props entfernt.',
+        type = 'success'
+    })
+    LogPropAction('admin_clear', src, GetIdentifier(src), GetPlayerName(src) or 'Konsole',
+        nil, nil, nil, nil, { deleted_count = count })
     pcall(function() exports.d4rk_livemap:ClearMarkers('prop_placement') end)
 end)
 
@@ -375,7 +411,11 @@ RegisterNetEvent('prop_placement:adminClearPlayer', function(targetIdentifier)
     local src = source
     if not IsAdmin(src) then return end
     local removed = RemovePlayerProps(targetIdentifier)
-    lib.notify(src, { title = 'Props gelöscht', description = removed .. ' Props entfernt.', type = 'success' })
+    lib.notify(src, {
+        title = 'Props gelöscht',
+        description = removed .. ' Props entfernt.',
+        type = 'success'
+    })
 end)
 
 RegisterNetEvent('prop_placement:requestPropList', function(filterIdentifier)
@@ -385,18 +425,17 @@ RegisterNetEvent('prop_placement:requestPropList', function(filterIdentifier)
     for id, prop in pairs(placedProps) do
         if not filterIdentifier or prop.ownerIdentifier == filterIdentifier then
             table.insert(list, {
-                id              = id,
-                itemName        = prop.itemName,
-                model           = prop.model,
-                x               = prop.x,
-                y               = prop.y,
-                z               = prop.z,
+                id = id,
+                itemName = prop.itemName,
+                model = prop.model,
+                x = prop.x,
+                y = prop.y,
+                z = prop.z,
                 ownerIdentifier = prop.ownerIdentifier or 'Unbekannt',
                 persistent      = prop.persistent,
             })
         end
     end
-    -- FIX #4: filterIdentifier als dritten Parameter mitsenden damit Client den Filter-Namen anzeigen kann
     TriggerClientEvent('prop_placement:receivePropList', src, list, filterIdentifier)
 end)
 
@@ -417,34 +456,39 @@ RegisterNetEvent('prop_placement:reloadProps', function()
 
     placedProps     = {}
     playerPropCount = {}
-    nextId          = 1
 
-    local result    = MySQL.query.await('SELECT * FROM prop_placement_props WHERE persistent = 1 ORDER BY id ASC')
+    local result    = MySQL.query.await(
+        'SELECT * FROM prop_placement_props WHERE persistent = 1 ORDER BY id ASC'
+    )
     if result then
         for _, row in ipairs(result) do
-            local id        = row.id
-            local owner     = row.owner_identifier
-            placedProps[id] = {
-                id              = id,
-                itemName        = row.item_name,
-                model           = row.model,
-                x               = row.x,
-                y               = row.y,
-                z               = row.z,
+            placedProps[row.id] = {
+                id = row.id,
+                itemName = row.item_name,
+                model = row.model,
+                x = row.x,
+                y = row.y,
+                z = row.z,
                 rotation        = row.rotation,
-                ownerIdentifier = owner,
+                ownerIdentifier = row.owner_identifier,
                 persistent      = true,
             }
-            if owner then playerPropCount[owner] = (playerPropCount[owner] or 0) + 1 end
-            if id >= nextId then nextId = id + 1 end
+            if row.owner_identifier then
+                playerPropCount[row.owner_identifier] =
+                    (playerPropCount[row.owner_identifier] or 0) + 1
+            end
         end
     end
 
     TriggerClientEvent('prop_placement:syncAll', -1, GetPropList())
 
     local count = result and #result or 0
-    lib.notify(src, { title = 'Props neu geladen ✅', description = count .. ' Props neu geladen.', type = 'success' })
-    print(('[prop_placement] Admin %d: Props neu geladen (%d Props)'):format(src, count))
+    lib.notify(src, {
+        title = 'Props neu geladen ✅',
+        description = count .. ' Props neu geladen.',
+        type = 'success'
+    })
+    print(('[prop_placement] Admin %d: Props neu geladen (%d)'):format(src, count))
 end)
 
 -- ─────────────────────────────────────────────────────────
@@ -454,9 +498,7 @@ end)
 RegisterCommand('prop_clearall', function(src)
     if src ~= 0 and not IsAdmin(src) then return end
     local count = 0
-    local ids = {}
-    for id in pairs(placedProps) do table.insert(ids, id) end
-    for _, id in ipairs(ids) do
+    for id in pairs(placedProps) do
         placedProps[id] = nil; count = count + 1
     end
     playerPropCount = {}
@@ -465,7 +507,6 @@ RegisterCommand('prop_clearall', function(src)
     print(('[prop_placement] Alle %d Props gelöscht.'):format(count))
 end, true)
 
--- FIX #3: true statt false – FiveM-ACE prüft den Befehl auf Serverebene ab
 RegisterCommand('giveprop', function(src, args)
     if src ~= 0 and not IsAdmin(src) then return end
     local itemName = args[1]
@@ -477,7 +518,8 @@ RegisterCommand('giveprop', function(src, args)
     end
     if not target then return end
     exports.ox_inventory:AddItem(target, itemName, amount)
-    print(('[prop_placement] %dx %s → Spieler %d gegeben.'):format(amount, Config.Props[itemName].label, target))
+    print(('[prop_placement] %dx %s → Spieler %d gegeben.'):format(
+        amount, Config.Props[itemName].label, target))
 end, true)
 
 RegisterCommand('prop_list', function(src)
