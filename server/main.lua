@@ -389,6 +389,53 @@ RegisterNetEvent('prop_placement:requestAdminMenu', function()
     end
 end)
 
+RegisterNetEvent('prop_placement:reloadProps', function()
+    local src = source
+    if not IsAdmin(src) then
+        lib.notify(src, { title = 'Keine Berechtigung', type = 'error' })
+        return
+    end
+
+    -- DB neu einlesen
+    local result    = MySQL.query.await('SELECT * FROM prop_placement_props WHERE persistent = 1 ORDER BY id ASC')
+
+    -- In-Memory zurücksetzen
+    placedProps     = {}
+    playerPropCount = {}
+    nextId          = 1
+
+    if result then
+        for _, row in ipairs(result) do
+            local id        = row.id
+            local owner     = row.owner_identifier
+            placedProps[id] = {
+                id              = id,
+                itemName        = row.item_name,
+                model           = row.model,
+                x               = row.x,
+                y               = row.y,
+                z               = row.z,
+                rotation        = row.rotation,
+                ownerIdentifier = owner,
+                persistent      = true,
+            }
+            if owner then playerPropCount[owner] = (playerPropCount[owner] or 0) + 1 end
+            if id >= nextId then nextId = id + 1 end
+        end
+    end
+
+    -- Alle Clients neu synchronisieren
+    TriggerClientEvent('prop_placement:syncAll', -1, GetPropList())
+
+    local count = result and #result or 0
+    lib.notify(src, {
+        title       = 'Props neu geladen ✅',
+        description = count .. ' Props aus DB geladen und an alle Clients gesendet.',
+        type        = 'success',
+    })
+    print(('[prop_placement] Admin %d: Props neu geladen (%d Props)'):format(src, count))
+end)
+
 RegisterCommand('prop_clearall', function(src)
     if src ~= 0 and not IsAdmin(src) then return end
     local count = 0

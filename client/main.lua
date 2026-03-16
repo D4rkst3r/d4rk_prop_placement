@@ -6,9 +6,10 @@
     ╚══════════════════════════════════════════════════════╝
 ]]
 
-local placedProps = {} -- [propId] = entity
-local allPropData = {} -- [propId] = propData
-local propGrid    = {} -- ['cellX:cellY'] = { propId, ... }
+local placedProps = {}
+local allPropData = {}
+local propGrid    = {}
+local isSyncing   = false   -- Guard gegen gleichzeitige syncAll-Aufrufe
 
 -- ─────────────────────────────────────────────────────────
 -- Hilfsfunktionen
@@ -155,18 +156,24 @@ local function SpawnProp(propData)
 
     local entity = CreateObject(model, propData.x, propData.y, propData.z, false, false, false)
 
+    -- Sicherstellen dass Entity wirklich existiert bevor Properties gesetzt werden
+    if not DoesEntityExist(entity) then
+        DebugLog('Entity konnte nicht erstellt werden: #' .. propId)
+        SetModelAsNoLongerNeeded(model)
+        return
+    end
+
+    -- Erst als Mission Entity markieren damit GTA es nicht garbage-collected
     SetEntityAsMissionEntity(entity, true, true)
+
     SetEntityRotation(entity, 0.0, 0.0, propData.rotation, 2, true)
     FreezeEntityPosition(entity, true)
     SetEntityCollision(entity, true, true)
     SetEntityInvincible(entity, true)
     SetEntityCanBeDamaged(entity, false)
-
-    -- FIX: Alpha explizit auf 255 setzen
-    -- verhindert unsichtbare Props wenn GTA intern noch einen transparenten
-    -- Zustand vom letzten Preview-Entity hat
     SetEntityAlpha(entity, 255, false)
-    NetworkSetEntityInvisibleToNetwork(entity, false)
+    -- ENTFERNT: NetworkSetEntityInvisibleToNetwork – nur für vernetzte Entities sinnvoll,
+    -- bei lokalen Objekten (isNetwork=false) kann es Probleme verursachen
 
     placedProps[propId] = entity
     allPropData[propId] = propData
@@ -206,6 +213,7 @@ local function ClearAllLocalProps()
     placedProps = {}
     allPropData = {}
     propGrid    = {}
+    isSyncing   = false     -- Guard zurücksetzen
 end
 
 -- ─────────────────────────────────────────────────────────
@@ -281,11 +289,17 @@ end)
 -- ─────────────────────────────────────────────────────────
 
 RegisterNetEvent('prop_placement:syncAll', function(propList)
+    -- Guard: verhindert dass zwei syncAll gleichzeitig laufen
+    -- (passiert wenn playerSpawned mehrfach feuert)
+    if isSyncing then
+        DebugLog('syncAll ignoriert – läuft bereits')
+        return
+    end
+    isSyncing = true
+
     ClearAllLocalProps()
 
     CreateThread(function()
-        -- FIX: Auf Kollision warten bevor Props gespawnt werden.
-        -- GTA löscht Objekte die in noch nicht gestreamten Bereichen erstellt werden.
         local ped    = PlayerPedId()
         local waited = 0
         repeat
@@ -296,6 +310,7 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
 
         local playerPos = GetEntityCoords(ped)
 
+        -- Bestehende Welt-Objekte an diesen Positionen entfernen
         for _, propData in ipairs(propList) do
             local model    = GetHashKey(propData.model)
             local existing = GetClosestObjectOfType(
@@ -308,6 +323,7 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
             end
         end
 
+        -- Grid und allPropData aufbauen
         for _, propData in ipairs(propList) do
             allPropData[propData.id] = propData
             if Config.Grid.Enabled then
@@ -315,6 +331,7 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
             end
         end
 
+        -- Props in Reichweite spawnen
         for _, propData in ipairs(propList) do
             local dist = #(playerPos - vector3(propData.x, propData.y, propData.z))
             if not Config.Streaming.Enabled or dist <= Config.Streaming.SpawnRadius then
@@ -322,13 +339,12 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
                 Wait(30)
             end
         end
+
+        isSyncing = false
+        streamStillFrames = 0
     end)
 
     DebugLog(('Sync: %d Props empfangen'):format(#propList))
-
-    -- FIX: Streaming-Intervall zurücksetzen damit Props sofort
-    -- geprüft werden, auch wenn der Spieler still steht
-    streamStillFrames = 0
 end)
 
 RegisterNetEvent('prop_placement:propPlaced', function(propData)
@@ -596,6 +612,11 @@ end, false)
 
 RegisterCommand('proplist', function()
     TriggerServerEvent('prop_placement:requestPropList', nil)
+end, false)
+
+RegisterCommand('propreload', function()
+    -- Nur für Admins – Prüfung erfolgt serverseitig
+    TriggerServerEvent('prop_placement:reloadProps')
 end, false)
 
 if Config.Debug then
