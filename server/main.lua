@@ -117,6 +117,32 @@ CreateThread(function()
             if id >= nextId then nextId = id + 1 end
         end
         print(('[prop_placement] %d persistente Props aus Datenbank geladen.'):format(#result))
+
+        -- d4rk_livemap Integration: bestehende Props als Marker laden
+        -- Wait(2000) damit d4rk_livemap garantiert bereit ist
+        CreateThread(function()
+            Wait(2000)
+            local colorMap = { Allgemein = '#60a5fa', Polizei = '#f87171', Baustelle = '#fbbf24', Admin = '#c084fc' }
+            local loaded   = 0
+            for id, prop in pairs(placedProps) do
+                pcall(function()
+                    local cfg = Config.Props[prop.itemName]
+                    exports.d4rk_livemap:AddMarker({
+                        id     = 'prop_' .. id,
+                        x      = prop.x,
+                        y      = prop.y,
+                        z      = prop.z,
+                        label  = (cfg and cfg.label or prop.itemName) .. ' #' .. id,
+                        color  = colorMap[(cfg and cfg.category)] or '#00d4aa',
+                        icon   = 'box',
+                        group  = (cfg and cfg.category) or 'Props',
+                        source = 'prop_placement',
+                    })
+                    loaded = loaded + 1
+                end)
+            end
+            print(('[prop_placement] %d Props an d4rk_livemap übermittelt.'):format(loaded))
+        end)
     end
 end)
 
@@ -240,6 +266,22 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
     lib.notify(src, { title = 'Platziert! ✅', description = propConfig.label .. ' platziert.', type = 'success' })
     LogPropAction('place', src, identifier, GetPlayerName(src) or 'Unbekannt', propId, itemName, propConfig.model,
         { x = posData.x, y = posData.y, z = posData.z, rotation = posData.rotation }, {})
+
+    -- d4rk_livemap Integration
+    pcall(function()
+        exports.d4rk_livemap:AddMarker({
+            id     = 'prop_' .. propId,
+            x      = posData.x,
+            y      = posData.y,
+            z      = posData.z,
+            label  = propConfig.label .. ' #' .. propId,
+            color  = ({ Allgemein = '#60a5fa', Polizei = '#f87171', Baustelle = '#fbbf24', Admin = '#c084fc' })
+            [propConfig.category] or '#00d4aa',
+            icon   = 'box',
+            group  = propConfig.category or 'Props',
+            source = 'prop_placement',
+        })
+    end)
 end)
 
 RegisterNetEvent('prop_placement:remove', function(propId)
@@ -272,6 +314,9 @@ RegisterNetEvent('prop_placement:remove', function(propId)
         'success' })
     LogPropAction('remove', src, identifier, GetPlayerName(src) or 'Unbekannt', propId, prop.itemName, prop.model,
         { x = prop.x, y = prop.y, z = prop.z, rotation = prop.rotation }, { owner = prop.ownerIdentifier })
+
+    -- d4rk_livemap Integration
+    pcall(function() exports.d4rk_livemap:RemoveMarker('prop_' .. propId) end)
 end)
 
 RegisterNetEvent('prop_placement:adminGive', function(targetId, itemName, amount)
@@ -304,6 +349,7 @@ RegisterNetEvent('prop_placement:adminClearAll', function()
     LogPropAction('admin_clear', src, GetIdentifier(src), GetPlayerName(src) or 'Konsole', nil, nil, nil, nil,
         { deleted_count = count })
     print(('[prop_placement] Admin %d löschte alle %d Props.'):format(src, count))
+    pcall(function() exports.d4rk_livemap:ClearMarkers('prop_placement') end)
 end)
 
 RegisterNetEvent('prop_placement:adminClearPlayer', function(targetIdentifier)

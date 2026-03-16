@@ -140,18 +140,8 @@ header{background:var(--s1);border-bottom:1px solid var(--border);padding:0 28px
 .chart-box{padding:16px 18px;height:264px}
 .chart-box-sm{padding:14px 18px;height:220px}
 
-/* ── Map ── */
-.map-wrap{padding:12px 14px;position:relative}
-/* FIX: Canvas bekommt explizite display-Größe per CSS, Buffer-Größe per JS */
-#propMap{display:block;width:100%;height:420px;border-radius:8px;border:1px solid var(--border);cursor:crosshair}
-.map-leg{display:flex;flex-wrap:wrap;gap:10px;padding:8px 16px 12px}
-.leg-item{display:flex;align-items:center;gap:5px;font-size:.7rem;color:var(--muted)}
-.leg-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-#mapTip{position:fixed;background:var(--s2);border:1px solid var(--border2);border-radius:8px;padding:10px 13px;font-size:.76rem;pointer-events:none;z-index:999;display:none;min-width:190px;line-height:1.6;box-shadow:0 8px 24px #000a}
-#mapTip strong{color:var(--teal);font-family:'JetBrains Mono',monospace}
-
-/* No-props overlay */
-.map-empty{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--muted);font-size:.85rem;text-align:center;pointer-events:none}
+/* ── Map (iframe) ── */
+#livemapFrame{border-radius:0}
 
 .tlist-item{display:flex;align-items:center;gap:8px;padding:8px 18px;border-bottom:1px solid #0a0c16}
 .tlist-item:last-child{border-bottom:none}
@@ -194,7 +184,6 @@ tr:hover td{background:#0c0f1c}
 </style>
 </head>
 <body>
-<div id="mapTip"></div>
 <header>
   <div class="logo"><div class="logo-icon">🧱</div>prop_placement</div>
   <span id="dot" class="dot dead"></span>
@@ -258,12 +247,29 @@ tr:hover td{background:#0c0f1c}
       <div class="ph">
         <h2>🗺️ Prop-Karte</h2>
         <span class="pill pill-gray" id="mapCount">0 Props</span>
+        <div class="ph-right">
+          <a id="mapOpenBtn" href="#" target="_blank" class="btn btn-sm" style="text-decoration:none;font-size:.7rem">↗ Vollbild</a>
+        </div>
       </div>
-      <div class="map-wrap" id="mapWrap">
-        <canvas id="propMap" width="800" height="420"></canvas>
-        <div id="mapEmptyMsg" class="map-empty" style="display:none">Keine Props platziert</div>
+      <div style="position:relative;height:440px">
+        <iframe id="livemapFrame"
+          src=""
+          style="width:100%;height:100%;border:none;border-radius:0 0 0 0;display:block;background:#07080f"
+          loading="lazy">
+        </iframe>
+        <div id="mapOffline" style="
+          position:absolute;inset:0;background:#07080f;
+          display:flex;flex-direction:column;align-items:center;justify-content:center;
+          gap:12px;color:#4a5275;font-size:.85rem;
+        ">
+          <div style="font-size:2rem">🗺️</div>
+          <div>d4rk_livemap nicht erreichbar</div>
+          <a id="mapFallbackLink" href="#" target="_blank"
+             style="color:#00d4aa;font-size:.75rem;text-decoration:none;border:1px solid #00a884;padding:4px 12px;border-radius:6px">
+            Karte öffnen →
+          </a>
+        </div>
       </div>
-      <div class="map-leg" id="mapLeg"></div>
     </div>
     <div style="display:flex;flex-direction:column;gap:20px">
       <div class="panel" style="flex:0 0 auto">
@@ -463,179 +469,49 @@ function buildDistChart(props) {
   });
 }
 
-// ── GTA5 Karten-Bild vorladen ─────────────────────────────
-// Falls das Bild nicht lädt → Fallback auf dunkles Gitter
-const MAP_BG = new Image();
-MAP_BG.crossOrigin = 'anonymous';
-// Öffentlich verfügbares GTA5 Satellitenbild – kann durch lokale Datei ersetzt werden
-// z.B. nui://prop_placement/web/images/map.jpg (512x512 oder größer)
-MAP_BG.src = 'https://i.imgur.com/wxqSSeL.jpeg';
-let mapImgReady = false;
-MAP_BG.onload  = () => { mapImgReady = true; requestAnimationFrame(() => drawMap(allMapProps)); };
-MAP_BG.onerror = () => { console.warn('[prop_placement] Karten-Bild konnte nicht geladen werden – Fallback auf Gitter.'); };
-const MX0=-4000, MX1=4500, MY0=-4500, MY1=8500;
+// ── d4rk_livemap iframe einbinden ────────────────────────
+// URL zur d4rk_livemap Instanz – selber Server, anderer Port/Pfad
+const LIVEMAP_URL = window.location.origin.replace(':30120', ':30120') + '/d4rk_livemap/?mode=markers&group=Props&sidebar=0';
 
-function w2c(wx, wy, W, H) {
-  return [
-    (wx - MX0) / (MX1 - MX0) * W,
-    (1 - (wy - MY0) / (MY1 - MY0)) * H
-  ];
+function initMap() {
+  const frame       = document.getElementById('livemapFrame');
+  const offline     = document.getElementById('mapOffline');
+  const openBtn     = document.getElementById('mapOpenBtn');
+  const fallback    = document.getElementById('mapFallbackLink');
+
+  if (openBtn)  openBtn.href  = LIVEMAP_URL;
+  if (fallback) fallback.href = LIVEMAP_URL;
+
+  if (!frame) return;
+
+  frame.src = LIVEMAP_URL;
+
+  frame.onload = () => {
+    if (offline) offline.style.display = 'none';
+  };
+  frame.onerror = () => {
+    if (offline) offline.style.display = 'flex';
+    frame.style.display = 'none';
+  };
+
+  // Timeout: wenn nach 5s kein onload → offline anzeigen
+  setTimeout(() => {
+    try {
+      // Cross-origin prüfen: wenn contentDocument null → geladen aber leer
+      if (frame.contentDocument === null) {
+        if (offline) offline.style.display = 'none'; // läuft in iframe
+      }
+    } catch(e) {
+      // SecurityError = anderer Origin aber geladen → gut
+      if (offline) offline.style.display = 'none';
+    }
+  }, 5000);
 }
 
-function drawMap(props) {
-  const canvas   = document.getElementById('propMap');
-  const emptyMsg = document.getElementById('mapEmptyMsg');
-  if (!canvas) return;
-
-  // FIX: Parent-Breite verwenden, da getBoundingClientRect bei Canvas unzuverlässig ist
-  // Höhe ist fix 420px (matching HTML-Attribut)
-  const parent = canvas.parentElement;
-  const W = (parent ? parent.clientWidth - 24 : 800) || 800;
-  const H = 420;
-
-  // Canvas-Buffer-Größe setzen (muss explizit gesetzt werden, CSS-Größe reicht nicht)
-  canvas.width  = W;
-  canvas.height = H;
-
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0, 0, W, H);
-
-  // Hintergrund: GTA5 Satellitenbild oder Fallback-Gitter
-  if (mapImgReady) {
-    // Karten-Bild skaliert auf Canvas zeichnen
-    ctx.drawImage(MAP_BG, 0, 0, W, H);
-    // Leichte Abdunklung für bessere Dot-Sichtbarkeit
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.30)';
-    ctx.fillRect(0, 0, W, H);
-  } else {
-    // Fallback: dunkler Gradient
-    const grad = ctx.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0, '#080a14');
-    grad.addColorStop(1, '#05070e');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H);
-  }
-
-  // Gitterlinien (dezent, nur bei Fallback wirklich sichtbar)
-  ctx.strokeStyle = mapImgReady ? 'rgba(255,255,255,0.06)' : '#0d1020';
-  ctx.lineWidth = 1;
-  for (let gx = MX0; gx <= MX1; gx += 1000) {
-    const [cx] = w2c(gx, 0, W, H);
-    ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke();
-  }
-  for (let gy = MY0; gy <= MY1; gy += 1000) {
-    const [,cy] = w2c(0, gy, W, H);
-    ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.stroke();
-  }
-
-  // Referenzpunkte (Los Santos, Sandy Shores, Paleto Cove)
-  const refs = [
-    {wx:200,  wy:-700, label:'LS'},
-    {wx:1800, wy:3500, label:'SS'},
-    {wx:-1200,wy:2600, label:'PC'},
-  ];
-  refs.forEach(r => {
-    const [cx, cy] = w2c(r.wx, r.wy, W, H);
-    // Hintergrund-Kreis
-    ctx.beginPath(); ctx.arc(cx, cy, 16, 0, Math.PI*2);
-    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1; ctx.stroke();
-    // Label
-    ctx.fillStyle = 'rgba(255,255,255,0.7)';
-    ctx.font = 'bold 9px "JetBrains Mono", monospace';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(r.label, cx, cy);
-  });
-
-  // Leere Karte: Meldung anzeigen
-  if (!props || !props.length) {
-    emptyMsg.style.display = 'block';
-    document.getElementById('mapLeg').innerHTML = '';
-    document.getElementById('mapCount').textContent = '0 Props';
-    return;
-  }
-  emptyMsg.style.display = 'none';
-
-  // Props zeichnen
-  props.forEach(p => {
-    const [cx, cy] = w2c(p.x, p.y, W, H);
-    const col = catColor(p.category);
-
-    // Äußerer Glow-Ring
-    ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI*2);
-    ctx.fillStyle = col + '18'; ctx.fill();
-
-    // Mittlerer Glow
-    ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI*2);
-    ctx.fillStyle = col + '40'; ctx.fill();
-
-    // Kern-Dot
-    ctx.beginPath(); ctx.arc(cx, cy, 4, 0, Math.PI*2);
-    ctx.fillStyle = col; ctx.fill();
-
-    // Weißer Highlight-Punkt in der Mitte
-    ctx.beginPath(); ctx.arc(cx - 1, cy - 1, 1.2, 0, Math.PI*2);
-    ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.fill();
-  });
-
-  // Legende
-  const cats = {};
-  props.forEach(p => { const c = p.category||'Sonstiges'; cats[c]=(cats[c]||0)+1; });
-  document.getElementById('mapLeg').innerHTML =
-    Object.entries(cats).map(([c,n]) =>
-      `<div class="leg-item"><div class="leg-dot" style="background:${catColor(c)}"></div>${c}: ${n}</div>`
-    ).join('');
-  document.getElementById('mapCount').textContent = fmt(props.length) + ' Props';
-}
-
-// Map Tooltip & Click
-const mapCanvas = document.getElementById('propMap');
-const mapTip    = document.getElementById('mapTip');
-if (mapCanvas) {
-  mapCanvas.addEventListener('mousemove', e => {
-    const r  = mapCanvas.getBoundingClientRect();
-    const scX = mapCanvas.width  / r.width;
-    const scY = mapCanvas.height / r.height;
-    const mx = (e.clientX - r.left) * scX;
-    const my = (e.clientY - r.top)  * scY;
-    let found = null;
-    for (const p of allMapProps) {
-      const [cx, cy] = w2c(p.x, p.y, mapCanvas.width, mapCanvas.height);
-      if (Math.hypot(mx-cx, my-cy) < 14) { found = p; break; }
-    }
-    if (found) {
-      mapTip.style.display = 'block';
-      mapTip.style.left    = (e.clientX+14)+'px';
-      mapTip.style.top     = (e.clientY-8)+'px';
-      const sid = (found.ownerIdentifier||'?').replace('license:','').slice(0,16);
-      mapTip.innerHTML = `<strong>#${found.id} · ${found.itemName}</strong><br>
-        <span style="color:var(--muted)">X ${(+found.x).toFixed(1)} · Y ${(+found.y).toFixed(1)} · Z ${(+found.z).toFixed(1)}</span><br>
-        <span style="color:var(--muted)">Owner: ${sid}...</span><br>
-        <span style="color:var(--red);font-size:.7rem">Klicken zum Löschen</span>`;
-    } else {
-      mapTip.style.display = 'none';
-    }
-  });
-  mapCanvas.addEventListener('mouseleave', () => { mapTip.style.display='none'; });
-  mapCanvas.addEventListener('click', e => {
-    const r  = mapCanvas.getBoundingClientRect();
-    const mx = (e.clientX - r.left) * (mapCanvas.width  / r.width);
-    const my = (e.clientY - r.top)  * (mapCanvas.height / r.height);
-    for (const p of allMapProps) {
-      const [cx, cy] = w2c(p.x, p.y, mapCanvas.width, mapCanvas.height);
-      if (Math.hypot(mx-cx, my-cy) < 14) { delProp(p.id, p.itemName); break; }
-    }
-  });
-}
-
-// FIX: ResizeObserver auf Parent-Element, nicht Canvas selbst
-if (window.ResizeObserver) {
-  const mapParent = document.getElementById('mapWrap');
-  if (mapParent) {
-    new ResizeObserver(() => {
-      requestAnimationFrame(() => drawMap(allMapProps));
-    }).observe(mapParent);
-  }
+// Prop-Zähler aktualisieren (aus API-Daten)
+function updateMapCount(total) {
+  const el = document.getElementById('mapCount');
+  if (el) el.textContent = fmt(total) + ' Props';
 }
 
 // ── Props laden ───────────────────────────────────────────
@@ -645,18 +521,13 @@ async function loadProps() {
   document.getElementById('propsTbl').innerHTML = '<div class="empty">Lädt...</div>';
   try {
     const d = await api('/prop_placement/props?page='+propsP+'&pageSize=20');
-    allMapProps = d.all_map_props || [];
     const total = +(d.total || 0);
 
     document.getElementById('sActive').textContent    = fmt(total);
     document.getElementById('sActiveSub').textContent = 'aktive Props';
     document.getElementById('activePill').textContent = fmt(total) + ' Props aktiv';
-
-    // FIX: Karte nach einem Tick zeichnen, damit Layout fertig ist
-    requestAnimationFrame(() => {
-      drawMap(allMapProps);
-      buildDistChart(allMapProps);
-    });
+    updateMapCount(total);
+    buildDistChart(d.all_map_props || []);
 
     let rows = d.props || [];
     if (fi) rows = rows.filter(p => (p.itemName||'').toLowerCase().includes(fi));
@@ -783,6 +654,7 @@ async function loadAll() {
 
 // FIX: Erst nach vollständigem Laden starten
 window.addEventListener('load', () => {
+  initMap();
   loadAll();
   setInterval(loadAll, 30000);
 });
