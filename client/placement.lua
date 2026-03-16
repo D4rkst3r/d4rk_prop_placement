@@ -86,7 +86,7 @@ local function GetRaycastHit()
 end
 
 local function IsValidPosition(pos)
-    local groundZ, found = GetGroundZFor_3dCoord(pos.x, pos.y, pos.z + 5.0, false)
+    local found, groundZ = GetGroundZFor_3dCoord(pos.x, pos.y, pos.z + 5.0, false)
     if found and pos.z < groundZ - 5.0 then
         return false
     end
@@ -245,7 +245,7 @@ function StartPropPlacement(itemName, propConfig)
                     return
                 else
                     local reason = blocked and 'Position ist durch einen anderen Prop blockiert.' or
-                    'Hier kann kein Prop platziert werden.'
+                        'Hier kann kein Prop platziert werden.'
                     lib.notify({ title = 'Ungültige Position', description = reason, type = 'warning', duration = 2000 })
                 end
             end
