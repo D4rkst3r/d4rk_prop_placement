@@ -5,8 +5,9 @@
     ╚══════════════════════════════════════════════════════╝
 ]]
 
-local placedProps = {} -- [propId] = entity (gespawnte Entities)
-local allPropData = {} -- [propId] = propData (alle bekannten Props)
+local placedProps = {} -- [propId] = entity
+local allPropData = {} -- [propId] = propData
+local propGrid    = {} -- ['cellX:cellY'] = { propId, ... }
 
 -- ─────────────────────────────────────────────────────────
 -- Hilfsfunktionen
@@ -28,6 +29,84 @@ local function LoadModel(model)
         if t > 80 then return false end
     end
     return true
+end
+
+-- ─────────────────────────────────────────────────────────
+-- Grid-System Hilfsfunktionen
+-- ─────────────────────────────────────────────────────────
+
+local function GetGridCell(x, y)
+    local size = Config.Grid.GridSize
+    return math.floor(x / size), math.floor(y / size)
+end
+
+local function GetGridKey(cx, cy)
+    return cx .. ':' .. cy
+end
+
+local function AddToGrid(propId, x, y)
+    local cx, cy = GetGridCell(x, y)
+    local key    = GetGridKey(cx, cy)
+    if not propGrid[key] then propGrid[key] = {} end
+    propGrid[key][propId] = true
+end
+
+local function RemoveFromGrid(propId, x, y)
+    local cx, cy = GetGridCell(x, y)
+    local key    = GetGridKey(cx, cy)
+    if propGrid[key] then
+        propGrid[key][propId] = nil
+    end
+end
+
+--- Gibt alle Prop-IDs in der Nähe der Position zurück (Grid-Zelle + Nachbarzellen)
+--- @param x number
+--- @param y number
+--- @return table
+local function GetNearbyPropIds(x, y)
+    local cx, cy = GetGridCell(x, y)
+    local nearby = {}
+    -- Eigene Zelle + 8 Nachbarzellen
+    for dx = -1, 1 do
+        for dy = -1, 1 do
+            local key = GetGridKey(cx + dx, cy + dy)
+            if propGrid[key] then
+                for propId in pairs(propGrid[key]) do
+                    nearby[propId] = true
+                end
+            end
+        end
+    end
+    return nearby
+end
+
+-- ─────────────────────────────────────────────────────────
+-- Model-Preloading
+-- ─────────────────────────────────────────────────────────
+
+if Config.Preloading.Enabled then
+    CreateThread(function()
+        Wait(Config.Preloading.Delay)
+
+        local count = 0
+        for _, cfg in pairs(Config.Props) do
+            local model = GetHashKey(cfg.model)
+            if not HasModelLoaded(model) then
+                RequestModel(model)
+                local t = 0
+                while not HasModelLoaded(model) and t < 50 do
+                    Wait(100)
+                    t = t + 1
+                end
+                -- Modell im Speicher behalten aber als "nicht mehr gebraucht" markieren
+                -- GTA entlädt es erst wenn Speicher knapp wird
+                SetModelAsNoLongerNeeded(model)
+                count = count + 1
+            end
+        end
+
+        DebugLog(('Model-Preloading: %d Modelle vorgeladen.'):format(count))
+    end)
 end
 
 -- ─────────────────────────────────────────────────────────
@@ -93,6 +172,7 @@ local function SpawnProp(propData)
 
     placedProps[propId] = entity
     allPropData[propId] = propData
+    AddToGrid(propId, propData.x, propData.y)
     RegisterPropTarget(propId, entity, propData)
     SetModelAsNoLongerNeeded(model)
 
@@ -127,10 +207,11 @@ local function ClearAllLocalProps()
     end
     placedProps = {}
     allPropData = {}
+    propGrid    = {}
 end
 
 -- ─────────────────────────────────────────────────────────
--- Streaming-System
+-- Streaming-System mit Grid
 -- ─────────────────────────────────────────────────────────
 
 if Config.Streaming.Enabled then
@@ -139,21 +220,51 @@ if Config.Streaming.Enabled then
             Wait(Config.Streaming.CheckInterval)
 
             local playerPos = GetEntityCoords(PlayerPedId())
+            local px, py    = playerPos.x, playerPos.y
 
-            for propId, propData in pairs(allPropData) do
-                local propPos = vector3(propData.x, propData.y, propData.z)
-                local dist    = #(playerPos - propPos)
-                local spawned = placedProps[propId] and DoesEntityExist(placedProps[propId])
+            -- Mit Grid: nur Nachbarzellen prüfen (viel effizienter)
+            -- Ohne Grid: alle Props prüfen
+            local toCheck   = {}
 
-                if not spawned and dist <= Config.Streaming.SpawnRadius then
-                    SpawnProp(propData)
-                elseif spawned and dist > Config.Streaming.DespawnRadius then
-                    DespawnProp(propId)
+            if Config.Grid.Enabled then
+                toCheck = GetNearbyPropIds(px, py)
+                -- Auch gespawnte Props außerhalb des Grids prüfen (für Despawn)
+                for propId in pairs(placedProps) do
+                    toCheck[propId] = true
+                end
+            else
+                for propId in pairs(allPropData) do
+                    toCheck[propId] = true
+                end
+            end
+
+            for propId in pairs(toCheck) do
+                local propData = allPropData[propId]
+                if propData then
+                    local dist    = #(vector3(px, py, playerPos.z) - vector3(propData.x, propData.y, propData.z))
+                    local spawned = placedProps[propId] and DoesEntityExist(placedProps[propId])
+
+                    if not spawned and dist <= Config.Streaming.SpawnRadius then
+                        SpawnProp(propData)
+                    elseif spawned and dist > Config.Streaming.DespawnRadius then
+                        DespawnProp(propId)
+                    end
                 end
             end
         end
     end)
 end
+
+-- ─────────────────────────────────────────────────────────
+-- Inventar geschlossen → Platzierung abbrechen
+-- ─────────────────────────────────────────────────────────
+
+AddEventHandler('ox_inventory:closedInventory', function()
+    if IsCurrentlyPlacing() then
+        CancelPlacementExternal()
+        lib.notify({ title = 'Abgebrochen', description = 'Platzierung abgebrochen.', type = 'inform', duration = 2000 })
+    end
+end)
 
 -- ─────────────────────────────────────────────────────────
 -- Net Events – Server → Client
@@ -165,6 +276,7 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
     CreateThread(function()
         local playerPos = GetEntityCoords(PlayerPedId())
 
+        -- Alte übrig gebliebene Objekte entfernen
         for _, propData in ipairs(propList) do
             local model    = GetHashKey(propData.model)
             local existing = GetClosestObjectOfType(
@@ -177,18 +289,18 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
             end
         end
 
+        -- Alle Props speichern (Grid + allPropData)
         for _, propData in ipairs(propList) do
             allPropData[propData.id] = propData
+            if Config.Grid.Enabled then
+                AddToGrid(propData.id, propData.x, propData.y)
+            end
         end
 
+        -- Props in Reichweite spawnen
         for _, propData in ipairs(propList) do
-            if Config.Streaming.Enabled then
-                local dist = #(playerPos - vector3(propData.x, propData.y, propData.z))
-                if dist <= Config.Streaming.SpawnRadius then
-                    SpawnProp(propData)
-                    Wait(30)
-                end
-            else
+            local dist = #(playerPos - vector3(propData.x, propData.y, propData.z))
+            if not Config.Streaming.Enabled or dist <= Config.Streaming.SpawnRadius then
                 SpawnProp(propData)
                 Wait(30)
             end
@@ -201,6 +313,9 @@ end)
 RegisterNetEvent('prop_placement:propPlaced', function(propData)
     DebugLog('Neuer Prop empfangen: #' .. propData.id)
     allPropData[propData.id] = propData
+    if Config.Grid.Enabled then
+        AddToGrid(propData.id, propData.x, propData.y)
+    end
 
     if not Config.Streaming.Enabled then
         SpawnProp(propData)
@@ -215,6 +330,10 @@ end)
 
 RegisterNetEvent('prop_placement:propRemoved', function(propId)
     DebugLog('Prop #' .. propId .. ' wurde entfernt')
+    local propData = allPropData[propId]
+    if propData and Config.Grid.Enabled then
+        RemoveFromGrid(propId, propData.x, propData.y)
+    end
     allPropData[propId] = nil
     DespawnProp(propId)
 end)
@@ -242,10 +361,10 @@ RegisterNetEvent('prop_placement:receivePropList', function(list, filterName)
     table.sort(list, function(a, b) return a.id < b.id end)
 
     for _, prop in ipairs(list) do
-        local shortOwner = prop.ownerIdentifier:match('license:(.+)$') or prop.ownerIdentifier
-        shortOwner = shortOwner:sub(1, 12) .. '...'
-
+        local shortOwner   = prop.ownerIdentifier:match('license:(.+)$') or prop.ownerIdentifier
+        shortOwner         = shortOwner:sub(1, 12) .. '...'
         local capturedProp = prop
+
         table.insert(options, {
             title       = ('#%d – %s'):format(capturedProp.id, capturedProp.itemName),
             description = ('Pos: %.1f / %.1f / %.1f\nBesitzer: %s'):format(
@@ -275,35 +394,70 @@ RegisterNetEvent('prop_placement:receivePropList', function(list, filterName)
 end)
 
 -- ─────────────────────────────────────────────────────────
--- Admin-Menü
+-- Admin-Menü mit Kategorien
 -- ─────────────────────────────────────────────────────────
 
 RegisterNetEvent('prop_placement:openAdminMenu', function()
-    local options     = {}
-    local sortedItems = {}
+    -- Kategorien sammeln und sortieren
+    local categories = {}
+    local catItems   = {} -- [category] = { {itemName, cfg}, ... }
 
     for itemName, cfg in pairs(Config.Props) do
-        table.insert(sortedItems, { itemName = itemName, cfg = cfg })
+        local cat = cfg.category or 'Sonstiges'
+        if not catItems[cat] then
+            catItems[cat] = {}
+            table.insert(categories, cat)
+        end
+        table.insert(catItems[cat], { itemName = itemName, cfg = cfg })
     end
-    table.sort(sortedItems, function(a, b) return a.cfg.label < b.cfg.label end)
+    table.sort(categories)
 
-    for _, entry in ipairs(sortedItems) do
-        local itemName = entry.itemName
-        local cfg      = entry.cfg
-        local flags    = (cfg.adminOnly and '🔒 ' or '') .. (cfg.persistent and '💾 ' or '')
+    local options = {}
+
+    -- Kategorien als Untermenüs
+    for _, cat in ipairs(categories) do
+        local items    = catItems[cat]
+        local catName  = cat
+        local catCount = #items
+
+        -- Items in der Kategorie sortieren
+        table.sort(items, function(a, b) return a.cfg.label < b.cfg.label end)
 
         table.insert(options, {
-            title       = flags .. cfg.label,
-            description = ('Model: %s | Gewicht: %sg'):format(cfg.model, cfg.weight or 1000),
+            title       = ('📦 %s (%d)'):format(catName, catCount),
+            description = 'Kategorie öffnen',
+            arrow       = true,
             onSelect    = function()
-                local input = lib.inputDialog('Prop-Item geben', {
-                    { type = 'number', label = 'Server-ID des Spielers', required = true, min = 1 },
-                    { type = 'number', label = 'Anzahl',                 default = 1,     min = 1, max = 99 },
-                })
-                if input and input[1] then
-                    TriggerServerEvent('prop_placement:adminGive',
-                        tonumber(input[1]), itemName, tonumber(input[2]) or 1)
+                local subOptions = {}
+
+                for _, entry in ipairs(items) do
+                    local itemName = entry.itemName
+                    local cfg      = entry.cfg
+                    local flags    = (cfg.adminOnly and '🔒 ' or '') .. (cfg.persistent and '💾 ' or '')
+
+                    table.insert(subOptions, {
+                        title       = flags .. cfg.label,
+                        description = ('Model: %s | %sg'):format(cfg.model, cfg.weight or 1000),
+                        onSelect    = function()
+                            local input = lib.inputDialog('Prop-Item geben', {
+                                { type = 'number', label = 'Server-ID des Spielers', required = true, min = 1 },
+                                { type = 'number', label = 'Anzahl',                 default = 1,     min = 1, max = 99 },
+                            })
+                            if input and input[1] then
+                                TriggerServerEvent('prop_placement:adminGive',
+                                    tonumber(input[1]), itemName, tonumber(input[2]) or 1)
+                            end
+                        end,
+                    })
                 end
+
+                lib.registerContext({
+                    id      = 'pp_cat_' .. catName,
+                    title   = ('🧱 %s'):format(catName),
+                    menu    = 'prop_placement_admin_menu',
+                    options = subOptions,
+                })
+                lib.showContext('pp_cat_' .. catName)
             end,
         })
     end
@@ -346,13 +500,13 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
 
     table.insert(options, {
         title       = '💥 Alle Props löschen',
-        description = 'Entfernt ALLE platzierten Props (DB + Clients)',
+        description = 'Entfernt ALLE platzierten Props',
         metadata    = { { label = 'Achtung', value = 'Kann nicht rückgängig gemacht werden!' } },
         onSelect    = function()
             CreateThread(function()
                 local confirmed = lib.alertDialog({
                     header   = 'Alle Props löschen?',
-                    content  = 'Diese Aktion löscht alle Props dauerhaft aus der Datenbank.',
+                    content  = 'Diese Aktion löscht alle Props dauerhaft.',
                     centered = true,
                     cancel   = true,
                 })
@@ -412,11 +566,13 @@ if Config.Debug then
     RegisterCommand('propdebug', function()
         local spawned = 0
         local total   = 0
+        local cells   = 0
         for _ in pairs(placedProps) do spawned = spawned + 1 end
         for _ in pairs(allPropData) do total = total + 1 end
+        for _ in pairs(propGrid) do cells = cells + 1 end
         lib.notify({
             title       = 'Prop Debug',
-            description = ('Gespawnt: %d / Gesamt bekannt: %d'):format(spawned, total),
+            description = ('Gespawnt: %d / Bekannt: %d / Grid-Zellen: %d'):format(spawned, total, cells),
             type        = 'inform',
         })
     end, false)

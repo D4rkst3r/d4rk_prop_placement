@@ -2,32 +2,18 @@
     prop_placement – shared/props.lua
     ════════════════════════════════════════════════════════
 
-    HIER PROPS HINZUFÜGEN / BEARBEITEN
-    ─────────────────────────────────────────────────────────
-    Jeder Eintrag entspricht einem platzierbaren Prop.
-    Das Item wird automatisch in ox_inventory registriert –
-    kein manuelles Eintragen in items.lua nötig!
-
     FELDER:
     ────────
     label      = 'Anzeigename im Inventar'
-    model      = 'gta5_prop_hash_name'     -- GTA5 Prop-Modell
-    weight     = 1000                      -- Gewicht in Gramm
-    adminOnly  = false                     -- true = nur Admins dürfen platzieren
-    ownerOnly  = true                      -- true = nur Besitzer/Admin darf entfernen
-                                           -- false = jeder darf entfernen
-    persistent = true                      -- true = überlebt Server-Neustart (DB)
-                                           -- false = nur bis Server-Neustart
-
-    ICON:
-    ──────
-    Lege eine PNG (512x512) unter web/images/<item_name>.png ab.
-    Kein Icon vorhanden? → ox_inventory zeigt ein Fragezeichen.
+    model      = 'gta5_prop_hash_name'
+    weight     = 1000
+    category   = 'Kategoriename'   -- Für Admin-Menü Gruppierung
+    adminOnly  = false
+    ownerOnly  = true
+    persistent = true
 
     PROP-MODELLE FINDEN:
-    ──────────────────────
-    https://forge.plebmasters.de/objects  (Suche + Vorschau)
-    https://gta.fandom.com/wiki/Objects   (Liste mit Kategorien)
+    https://forge.plebmasters.de/objects
 ]]
 
 Config.Props = {
@@ -37,6 +23,7 @@ Config.Props = {
         label      = 'Holzkiste',
         model      = 'prop_box_wood01a',
         weight     = 2000,
+        category   = 'Allgemein',
         adminOnly  = false,
         ownerOnly  = true,
         persistent = true,
@@ -45,6 +32,7 @@ Config.Props = {
         label      = 'Metallkiste',
         model      = 'prop_box_ammo02a',
         weight     = 3000,
+        category   = 'Allgemein',
         adminOnly  = false,
         ownerOnly  = true,
         persistent = true,
@@ -53,6 +41,7 @@ Config.Props = {
         label      = 'Mülleimer',
         model      = 'prop_bin_03a',
         weight     = 800,
+        category   = 'Allgemein',
         adminOnly  = false,
         ownerOnly  = true,
         persistent = true,
@@ -61,6 +50,7 @@ Config.Props = {
         label      = 'Gartenstuhl',
         model      = 'prop_chair_03',
         weight     = 1500,
+        category   = 'Allgemein',
         adminOnly  = false,
         ownerOnly  = true,
         persistent = true,
@@ -69,6 +59,7 @@ Config.Props = {
         label      = 'Klapptisch',
         model      = 'prop_table_01a',
         weight     = 2500,
+        category   = 'Allgemein',
         adminOnly  = false,
         ownerOnly  = true,
         persistent = true,
@@ -79,6 +70,7 @@ Config.Props = {
         label      = 'Verkehrskegel',
         model      = 'prop_roadcone01a',
         weight     = 500,
+        category   = 'Polizei',
         adminOnly  = false,
         ownerOnly  = false,
         persistent = true,
@@ -87,6 +79,7 @@ Config.Props = {
         label      = 'Polizeiabsperrung',
         model      = 'prop_mp_barrier_01b',
         weight     = 3000,
+        category   = 'Polizei',
         adminOnly  = false,
         ownerOnly  = false,
         persistent = true,
@@ -95,6 +88,7 @@ Config.Props = {
         label      = 'Straßensperre',
         model      = 'prop_mp_barrier_02b',
         weight     = 5000,
+        category   = 'Polizei',
         adminOnly  = false,
         ownerOnly  = false,
         persistent = true,
@@ -103,6 +97,7 @@ Config.Props = {
         label      = 'Nagelstreifen',
         model      = 'prop_ld_stinger_s',
         weight     = 1000,
+        category   = 'Polizei',
         adminOnly  = false,
         ownerOnly  = false,
         persistent = true,
@@ -113,6 +108,7 @@ Config.Props = {
         label      = 'Baustellenlampe',
         model      = 'prop_worklight_03a',
         weight     = 2000,
+        category   = 'Baustelle',
         adminOnly  = false,
         ownerOnly  = true,
         persistent = true,
@@ -121,6 +117,7 @@ Config.Props = {
         label      = 'Generator',
         model      = 'prop_generator_01a',
         weight     = 8000,
+        category   = 'Baustelle',
         adminOnly  = false,
         ownerOnly  = true,
         persistent = true,
@@ -129,6 +126,7 @@ Config.Props = {
         label      = 'Baugerüst',
         model      = 'prop_scaffolding_01',
         weight     = 10000,
+        category   = 'Baustelle',
         adminOnly  = false,
         ownerOnly  = true,
         persistent = true,
@@ -136,17 +134,19 @@ Config.Props = {
 
     -- ── Admin-Only ────────────────────────────────────────
     ['admin_barrier_large'] = {
-        label      = 'Große Absperrung (Admin)',
+        label      = 'Große Absperrung',
         model      = 'prop_barrier_work05',
         weight     = 1,
+        category   = 'Admin',
         adminOnly  = true,
         ownerOnly  = false,
         persistent = true,
     },
     ['admin_tent'] = {
-        label      = 'Zelt (Admin)',
+        label      = 'Zelt',
         model      = 'prop_fbi_tent01',
         weight     = 1,
+        category   = 'Admin',
         adminOnly  = true,
         ownerOnly  = false,
         persistent = true,
