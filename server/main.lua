@@ -194,10 +194,9 @@ AddEventHandler('playerDropped', function()
 end)
 
 RegisterNetEvent('prop_placement:requestSync', function()
-    local src    = source
-    local coords = GetEntityCoords(GetPlayerPed(src))
-    local nearby = GetNearbyProps(coords, Config.Streaming.SpawnRadius)
-    TriggerClientEvent('prop_placement:syncAll', src, nearby)
+    local src  = source
+    local list = GetPropList() -- ALLE Props senden
+    TriggerClientEvent('prop_placement:syncAll', src, list)
 end)
 
 RegisterNetEvent('prop_placement:place', function(itemName, posData)
@@ -219,8 +218,12 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
         local current = CountPlayerProps(identifier)
         if current >= Config.MaxPropsPerPlayer then
             lib.notify(src,
-                { title = 'Limit erreicht', description = ('%d/%d Props.'):format(current, Config.MaxPropsPerPlayer), type =
-                'warning' }); return
+                {
+                    title = 'Limit erreicht',
+                    description = ('%d/%d Props.'):format(current, Config.MaxPropsPerPlayer),
+                    type =
+                    'warning'
+                }); return
         end
     end
 
@@ -276,7 +279,7 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
             z      = posData.z,
             label  = propConfig.label .. ' #' .. propId,
             color  = ({ Allgemein = '#60a5fa', Polizei = '#f87171', Baustelle = '#fbbf24', Admin = '#c084fc' })
-            [propConfig.category] or '#00d4aa',
+                [propConfig.category] or '#00d4aa',
             icon   = 'box',
             group  = propConfig.category or 'Props',
             source = 'prop_placement',
@@ -295,12 +298,12 @@ RegisterNetEvent('prop_placement:remove', function(propId)
     local isOwner    = prop.ownerIdentifier == identifier
     local admin      = IsAdmin(src)
     local propConfig = Config.Props[prop.itemName]
-    local ownerOnly  = propConfig and propConfig.ownerOnly or true
-
-    if not admin and not isOwner and ownerOnly then
-        lib.notify(src, { title = 'Keine Berechtigung', type = 'error' }); return
+    local ownerOnly  = true
+    if propConfig ~= nil and propConfig.ownerOnly ~= nil then
+        ownerOnly = propConfig.ownerOnly
     end
-    if not admin and not isOwner and not ownerOnly then
+
+    if not admin and ownerOnly and not isOwner then
         lib.notify(src, { title = 'Keine Berechtigung', type = 'error' }); return
     end
 
@@ -310,8 +313,12 @@ RegisterNetEvent('prop_placement:remove', function(propId)
     MySQL.query('DELETE FROM prop_placement_props WHERE id = ?', { propId })
     TriggerClientEvent('prop_placement:propRemoved', -1, propId)
     lib.notify(src,
-        { title = 'Entfernt ✅', description = (propConfig and propConfig.label or prop.itemName) .. ' ins Inventar.', type =
-        'success' })
+        {
+            title = 'Entfernt ✅',
+            description = (propConfig and propConfig.label or prop.itemName) .. ' ins Inventar.',
+            type =
+            'success'
+        })
     LogPropAction('remove', src, identifier, GetPlayerName(src) or 'Unbekannt', propId, prop.itemName, prop.model,
         { x = prop.x, y = prop.y, z = prop.z, rotation = prop.rotation }, { owner = prop.ownerIdentifier })
 
@@ -327,8 +334,12 @@ RegisterNetEvent('prop_placement:adminGive', function(targetId, itemName, amount
     amount = math.max(1, math.min(amount or 1, 99))
     exports.ox_inventory:AddItem(targetId, itemName, amount)
     lib.notify(src,
-        { title = 'Item gegeben', description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId), type =
-        'success' })
+        {
+            title = 'Item gegeben',
+            description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId),
+            type =
+            'success'
+        })
     lib.notify(targetId,
         { title = 'Item erhalten', description = ('%dx %s erhalten.'):format(amount, propConfig.label), type = 'success' })
     LogPropAction('admin_give', src, GetIdentifier(src), GetPlayerName(src) or 'Unbekannt', nil, itemName, nil, nil,
@@ -339,8 +350,11 @@ RegisterNetEvent('prop_placement:adminClearAll', function()
     local src = source
     if not IsAdmin(src) then return end
     local count = 0
-    for id in pairs(placedProps) do
-        placedProps[id] = nil; count = count + 1
+    local ids = {}
+    for id in pairs(placedProps) do table.insert(ids, id) end
+    for _, id in ipairs(ids) do
+        placedProps[id] = nil
+        count = count + 1
     end
     playerPropCount = {}
     MySQL.query('DELETE FROM prop_placement_props')
@@ -439,8 +453,11 @@ end)
 RegisterCommand('prop_clearall', function(src)
     if src ~= 0 and not IsAdmin(src) then return end
     local count = 0
-    for id in pairs(placedProps) do
-        placedProps[id] = nil; count = count + 1
+    local ids = {}
+    for id in pairs(placedProps) do table.insert(ids, id) end
+    for _, id in ipairs(ids) do
+        placedProps[id] = nil
+        count = count + 1
     end
     playerPropCount = {}
     MySQL.query('DELETE FROM prop_placement_props')
