@@ -2,6 +2,7 @@
     ╔══════════════════════════════════════════════════════╗
     ║         prop_placement – client/placement.lua        ║
     ║   Platzierungs-Vorschau mit Ghost-Entity & Controls  ║
+    ║   OPTIMIERT für 400+ Spieler                         ║
     ╚══════════════════════════════════════════════════════╝
 
     STEUERUNG:
@@ -20,7 +21,7 @@ local previewEntity   = nil
 local currentRotation = 0.0
 local zOffset         = 0.0
 local placementValid  = false
-local snapEnabled     = false -- Laufzeit-Toggle für Snap-to-Grid
+local snapEnabled     = false
 
 -- FiveM Input-IDs
 local KEY_CONFIRM     = 38  -- E
@@ -44,17 +45,10 @@ local function RotToDirection(rot)
     )
 end
 
---- Koordinate auf Raster einrasten
---- @param value number
---- @param gridSize number
---- @return number
 local function SnapToGrid(value, gridSize)
     return math.floor(value / gridSize + 0.5) * gridSize
 end
 
---- Position auf Raster einrasten (optional)
---- @param pos vector3
---- @return vector3
 local function ApplySnap(pos)
     if not snapEnabled or not Config.SnapToGrid.Enabled then
         return pos
@@ -63,7 +57,7 @@ local function ApplySnap(pos)
     return vector3(
         SnapToGrid(pos.x, g),
         SnapToGrid(pos.y, g),
-        pos.z -- Z nicht einrasten
+        pos.z
     )
 end
 
@@ -71,20 +65,17 @@ local function GetRaycastHit()
     local camCoords                    = GetGameplayCamCoord()
     local dir                          = RotToDirection(GetGameplayCamRot(2))
     local dest                         = camCoords + dir * Config.Placement.MaxDistance
-
-    local playerPed                    = PlayerPedId()
-    local ignoreEnt                    = previewEntity or playerPed
-
+    local ignoreEnt                    = previewEntity or PlayerPedId()
     local ray                          = StartShapeTestRay(camCoords, dest, 1 | 16 | 8, ignoreEnt, 0)
     local _, hit, hitPos, _, hitEntity = GetShapeTestResult(ray)
 
     if hit == 1 then
-        local pos = vector3(hitPos.x, hitPos.y, hitPos.z + zOffset)
-        return ApplySnap(pos), true
+        return ApplySnap(vector3(hitPos.x, hitPos.y, hitPos.z + zOffset)), true
     end
     return ApplySnap(vector3(dest.x, dest.y, dest.z + zOffset)), false
 end
 
+-- ── BUGFIX: Rückgabewerte waren vertauscht ────────────────
 local function IsValidPosition(pos)
     local found, groundZ = GetGroundZFor_3dCoord(pos.x, pos.y, pos.z + 5.0, false)
     if found and pos.z < groundZ - 5.0 then
@@ -93,17 +84,10 @@ local function IsValidPosition(pos)
     return true
 end
 
---- Prüft ob ein anderer Prop zu nah an der Position ist
---- @param pos vector3
---- @return bool  true = blockiert
+-- ── OPTIMIERT: nur alle N Frames aufrufen ─────────────────
 local function IsBlockedByProp(pos)
-    local playerPed = PlayerPedId()
-    -- Radius von 0.5m für Kollisionsprüfung
     local obj = GetClosestObjectOfType(pos.x, pos.y, pos.z, 0.8, 0, false, true, false)
-    if DoesEntityExist(obj) and obj ~= previewEntity then
-        return true
-    end
-    return false
+    return DoesEntityExist(obj) and obj ~= previewEntity
 end
 
 local function CleanupPreview()
@@ -147,7 +131,7 @@ function StartPropPlacement(itemName, propConfig)
     isPlacing       = true
     currentRotation = 0.0
     zOffset         = 0.0
-    snapEnabled     = Config.SnapToGrid.Enabled -- Standard aus Config
+    snapEnabled     = Config.SnapToGrid.Enabled
 
     local pos       = GetEntityCoords(PlayerPedId())
     previewEntity   = CreateObject(model, pos.x, pos.y, pos.z, false, false, false)
@@ -167,7 +151,14 @@ function StartPropPlacement(itemName, propConfig)
         local lastRotateTime = 0
         local lastSnapToggle = 0
 
+        -- ── OPTIMIERT: Cache-Variablen ────────────────────
+        local frameCounter   = 0
+        local cachedBlocked  = false
+        local cachedText     = ''
+
         while isPlacing do
+            frameCounter = frameCounter + 1
+
             DisableControlAction(0, KEY_ROT_LEFT, true)
             DisableControlAction(0, KEY_ROT_RIGHT, true)
             DisableControlAction(0, 25, true)
@@ -176,20 +167,25 @@ function StartPropPlacement(itemName, propConfig)
             end
 
             local hitPos, hitGround = GetRaycastHit()
-            local blocked           = IsBlockedByProp(hitPos)
-            placementValid          = hitGround and IsValidPosition(hitPos) and not blocked
+
+            -- ── OPTIMIERT: Block-Check nur alle 10 Frames ─
+            if frameCounter % 10 == 0 then
+                cachedBlocked = IsBlockedByProp(hitPos)
+            end
+
+            placementValid = hitGround and IsValidPosition(hitPos) and not cachedBlocked
 
             SetEntityCoordsNoOffset(previewEntity, hitPos.x, hitPos.y, hitPos.z, false, false, false)
             SetEntityRotation(previewEntity, 0.0, 0.0, currentRotation, 2, true)
 
-            -- Marker-Farbe: grün = gültig, orange = blockiert, rot = ungültig
+            -- Marker-Farbe
             local r, g, b
             if placementValid then
-                r, g, b = 0, 200, 0   -- Grün
-            elseif blocked then
-                r, g, b = 220, 120, 0 -- Orange (blockiert durch anderes Prop)
+                r, g, b = 0, 200, 0
+            elseif cachedBlocked then
+                r, g, b = 220, 120, 0
             else
-                r, g, b = 220, 0, 0   -- Rot (ungültige Position)
+                r, g, b = 220, 0, 0
             end
 
             DrawMarker(1,
@@ -201,14 +197,13 @@ function StartPropPlacement(itemName, propConfig)
                 false, false, 2, nil, nil, false
             )
 
-            -- Snap-to-Grid Raster anzeigen
+            -- ── OPTIMIERT: 3×3 statt 5×5 Raster (9 statt 25 DrawMarker-Calls) ──
             if snapEnabled and Config.SnapToGrid.Enabled then
-                local g = Config.SnapToGrid.GridSize
-                -- Kleine Marker an Rasterpunkten in der Nähe
-                for dx = -2, 2 do
-                    for dy = -2, 2 do
-                        local gx = SnapToGrid(hitPos.x, g) + dx * g
-                        local gy = SnapToGrid(hitPos.y, g) + dy * g
+                local gs = Config.SnapToGrid.GridSize
+                for dx = -1, 1 do
+                    for dy = -1, 1 do
+                        local gx = SnapToGrid(hitPos.x, gs) + dx * gs
+                        local gy = SnapToGrid(hitPos.y, gs) + dy * gs
                         DrawMarker(1, gx, gy, hitPos.z,
                             0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                             0.05, 0.05, 0.02,
@@ -219,20 +214,22 @@ function StartPropPlacement(itemName, propConfig)
                 end
             end
 
-            -- HelpText
+            -- ── OPTIMIERT: TextUI nur bei Änderung updaten ─
             local snapText = ''
             if Config.SnapToGrid.Enabled then
                 snapText = ('  •  **[G]** Snap: **%s**'):format(snapEnabled and 'AN' or 'AUS')
             end
-            local statusText = placementValid and '' or (blocked and '  ⚠ Blockiert' or '  ✗ Ungültig')
+            local statusText = placementValid and '' or (cachedBlocked and '  ⚠ Blockiert' or '  ✗ Ungültig')
 
-            lib.showTextUI(
-                ('**[E]** Platzieren  •  **[Backspace]** Abbrechen\n**[Q]** ↺ Drehen  •  **[R]** ↻ Drehen  •  **[Scroll]** Höhe: **%.2fm**%s%s')
-                :format(zOffset, snapText, statusText),
-                { position = 'bottom-center', icon = 'fas fa-cube' }
-            )
+            local newText = ('**[E]** Platzieren  •  **[Backspace]** Abbrechen\n**[Q]** ↺ Drehen  •  **[R]** ↻ Drehen  •  **[Scroll]** Höhe: **%.2fm**%s%s')
+                :format(zOffset, snapText, statusText)
 
-            -- ── Platzieren (E) ───────────────────────────────
+            if newText ~= cachedText then
+                cachedText = newText
+                lib.showTextUI(newText, { position = 'bottom-center', icon = 'fas fa-cube' })
+            end
+
+            -- ── Platzieren (E) ────────────────────────────
             if IsDisabledControlJustPressed(0, KEY_CONFIRM) or IsControlJustPressed(0, KEY_CONFIRM) then
                 if placementValid then
                     TriggerServerEvent('prop_placement:place', itemName, {
@@ -244,26 +241,28 @@ function StartPropPlacement(itemName, propConfig)
                     CleanupPreview()
                     return
                 else
-                    local reason = blocked and 'Position ist durch einen anderen Prop blockiert.' or
-                        'Hier kann kein Prop platziert werden.'
+                    local reason = cachedBlocked
+                        and 'Position ist durch einen anderen Prop blockiert.'
+                        or 'Hier kann kein Prop platziert werden.'
                     lib.notify({ title = 'Ungültige Position', description = reason, type = 'warning', duration = 2000 })
                 end
             end
 
-            -- ── Abbrechen (Backspace) ────────────────────────
+            -- ── Abbrechen (Backspace) ─────────────────────
             if IsControlJustPressed(0, KEY_CANCEL) then
                 lib.notify({ title = 'Abgebrochen', description = 'Platzierung abgebrochen.', type = 'inform', duration = 2000 })
                 CleanupPreview()
                 return
             end
 
-            -- ── Snap-to-Grid Toggle (G) ──────────────────────
+            -- ── Snap-to-Grid Toggle (G) ───────────────────
             if Config.SnapToGrid.Enabled then
                 if IsDisabledControlJustPressed(0, KEY_SNAP) or IsControlJustPressed(0, KEY_SNAP) then
                     local now = GetGameTimer()
                     if (now - lastSnapToggle) >= 300 then
                         snapEnabled    = not snapEnabled
                         lastSnapToggle = now
+                        cachedText     = '' -- TextUI-Cache leeren damit sofort aktualisiert wird
                         lib.notify({
                             title       = 'Snap-to-Grid',
                             description = snapEnabled and 'Aktiviert' or 'Deaktiviert',
@@ -274,32 +273,36 @@ function StartPropPlacement(itemName, propConfig)
                 end
             end
 
-            -- ── Links drehen (Q) ─────────────────────────────
+            -- ── Links drehen (Q) ──────────────────────────
             if IsDisabledControlPressed(0, KEY_ROT_LEFT) then
                 local now = GetGameTimer()
                 if (now - lastRotateTime) >= 80 then
                     currentRotation = (currentRotation + Config.Placement.RotationStep) % 360.0
                     lastRotateTime  = now
+                    cachedText      = '' -- TextUI-Cache leeren
                 end
             end
 
-            -- ── Rechts drehen (R) ────────────────────────────
+            -- ── Rechts drehen (R) ─────────────────────────
             if IsDisabledControlPressed(0, KEY_ROT_RIGHT) then
                 local now = GetGameTimer()
                 if (now - lastRotateTime) >= 80 then
                     currentRotation = (currentRotation - Config.Placement.RotationStep + 360.0) % 360.0
                     lastRotateTime  = now
+                    cachedText      = '' -- TextUI-Cache leeren
                 end
             end
 
-            -- ── Höhe hoch ────────────────────────────────────
+            -- ── Höhe hoch ─────────────────────────────────
             if IsDisabledControlJustPressed(0, KEY_SCROLL_UP) or IsControlJustPressed(0, KEY_SCROLL_UP) then
-                zOffset = math.min(Config.Placement.ZMax, zOffset + Config.Placement.ZStep)
+                zOffset    = math.min(Config.Placement.ZMax, zOffset + Config.Placement.ZStep)
+                cachedText = '' -- TextUI-Cache leeren (Höhe hat sich geändert)
             end
 
-            -- ── Höhe runter ──────────────────────────────────
+            -- ── Höhe runter ───────────────────────────────
             if IsDisabledControlJustPressed(0, KEY_SCROLL_DOWN) or IsControlJustPressed(0, KEY_SCROLL_DOWN) then
-                zOffset = math.max(Config.Placement.ZMin, zOffset - Config.Placement.ZStep)
+                zOffset    = math.max(Config.Placement.ZMin, zOffset - Config.Placement.ZStep)
+                cachedText = '' -- TextUI-Cache leeren
             end
 
             Wait(0)

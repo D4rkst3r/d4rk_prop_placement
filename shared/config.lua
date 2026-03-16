@@ -6,7 +6,7 @@
 Config = {}
 
 -- ─── Debug ────────────────────────────────────────────
-Config.Debug = false
+Config.Debug = true
 
 -- ─── Limits ───────────────────────────────────────────
 Config.MaxPropsPerPlayer = 15

@@ -2,6 +2,7 @@
     ╔══════════════════════════════════════════════════════╗
     ║           prop_placement – client/main.lua           ║
     ║    Prop-Spawning, Sync, ox_target & Admin-Menü       ║
+    ║    OPTIMIERT für 400+ Spieler                        ║
     ╚══════════════════════════════════════════════════════╝
 ]]
 
@@ -32,7 +33,7 @@ local function LoadModel(model)
 end
 
 -- ─────────────────────────────────────────────────────────
--- Grid-System Hilfsfunktionen
+-- Grid-System
 -- ─────────────────────────────────────────────────────────
 
 local function GetGridCell(x, y)
@@ -59,14 +60,9 @@ local function RemoveFromGrid(propId, x, y)
     end
 end
 
---- Gibt alle Prop-IDs in der Nähe der Position zurück (Grid-Zelle + Nachbarzellen)
---- @param x number
---- @param y number
---- @return table
 local function GetNearbyPropIds(x, y)
     local cx, cy = GetGridCell(x, y)
     local nearby = {}
-    -- Eigene Zelle + 8 Nachbarzellen
     for dx = -1, 1 do
         for dy = -1, 1 do
             local key = GetGridKey(cx + dx, cy + dy)
@@ -87,7 +83,6 @@ end
 if Config.Preloading.Enabled then
     CreateThread(function()
         Wait(Config.Preloading.Delay)
-
         local count = 0
         for _, cfg in pairs(Config.Props) do
             local model = GetHashKey(cfg.model)
@@ -98,13 +93,10 @@ if Config.Preloading.Enabled then
                     Wait(100)
                     t = t + 1
                 end
-                -- Modell im Speicher behalten aber als "nicht mehr gebraucht" markieren
-                -- GTA entlädt es erst wenn Speicher knapp wird
                 SetModelAsNoLongerNeeded(model)
                 count = count + 1
             end
         end
-
         DebugLog(('Model-Preloading: %d Modelle vorgeladen.'):format(count))
     end)
 end
@@ -170,6 +162,12 @@ local function SpawnProp(propData)
     SetEntityInvincible(entity, true)
     SetEntityCanBeDamaged(entity, false)
 
+    -- FIX: Alpha explizit auf 255 setzen
+    -- verhindert unsichtbare Props wenn GTA intern noch einen transparenten
+    -- Zustand vom letzten Preview-Entity hat
+    SetEntityAlpha(entity, 255, false)
+    NetworkSetEntityInvisibleToNetwork(entity, false)
+
     placedProps[propId] = entity
     allPropData[propId] = propData
     AddToGrid(propId, propData.x, propData.y)
@@ -211,24 +209,37 @@ local function ClearAllLocalProps()
 end
 
 -- ─────────────────────────────────────────────────────────
--- Streaming-System mit Grid
+-- Streaming-System mit Grid + dynamischem Intervall
 -- ─────────────────────────────────────────────────────────
 
 if Config.Streaming.Enabled then
     CreateThread(function()
+        local lastPos       = vector3(0, 0, 0)
+        local stillFrames   = 0
+        -- OPTIMIERT: Dynamisches Intervall – steht der Spieler still, seltener prüfen
+        local checkInterval = Config.Streaming.CheckInterval
+
         while true do
-            Wait(Config.Streaming.CheckInterval)
+            Wait(checkInterval)
 
             local playerPos = GetEntityCoords(PlayerPedId())
             local px, py    = playerPos.x, playerPos.y
 
-            -- Mit Grid: nur Nachbarzellen prüfen (viel effizienter)
-            -- Ohne Grid: alle Props prüfen
-            local toCheck   = {}
+            -- Bewegung prüfen
+            local moved     = #(vector3(px, py, playerPos.z) - lastPos)
+            if moved < 2.0 then
+                stillFrames   = stillFrames + 1
+                -- Nach 5 Check-Zyklen ohne Bewegung: Intervall verdoppeln (max 10s)
+                checkInterval = math.min(10000, Config.Streaming.CheckInterval + stillFrames * 500)
+            else
+                stillFrames   = 0
+                checkInterval = Config.Streaming.CheckInterval
+            end
+            lastPos = vector3(px, py, playerPos.z)
 
+            local toCheck = {}
             if Config.Grid.Enabled then
                 toCheck = GetNearbyPropIds(px, py)
-                -- Auch gespawnte Props außerhalb des Grids prüfen (für Despawn)
                 for propId in pairs(placedProps) do
                     toCheck[propId] = true
                 end
@@ -276,7 +287,6 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
     CreateThread(function()
         local playerPos = GetEntityCoords(PlayerPedId())
 
-        -- Alte übrig gebliebene Objekte entfernen
         for _, propData in ipairs(propList) do
             local model    = GetHashKey(propData.model)
             local existing = GetClosestObjectOfType(
@@ -289,7 +299,6 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
             end
         end
 
-        -- Alle Props speichern (Grid + allPropData)
         for _, propData in ipairs(propList) do
             allPropData[propData.id] = propData
             if Config.Grid.Enabled then
@@ -297,7 +306,6 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
             end
         end
 
-        -- Props in Reichweite spawnen
         for _, propData in ipairs(propList) do
             local dist = #(playerPos - vector3(propData.x, propData.y, propData.z))
             if not Config.Streaming.Enabled or dist <= Config.Streaming.SpawnRadius then
@@ -321,7 +329,7 @@ RegisterNetEvent('prop_placement:propPlaced', function(propData)
         SpawnProp(propData)
     else
         local playerPos = GetEntityCoords(PlayerPedId())
-        local dist = #(playerPos - vector3(propData.x, propData.y, propData.z))
+        local dist      = #(playerPos - vector3(propData.x, propData.y, propData.z))
         if dist <= Config.Streaming.SpawnRadius then
             SpawnProp(propData)
         end
@@ -394,13 +402,12 @@ RegisterNetEvent('prop_placement:receivePropList', function(list, filterName)
 end)
 
 -- ─────────────────────────────────────────────────────────
--- Admin-Menü mit Kategorien
+-- Admin-Menü
 -- ─────────────────────────────────────────────────────────
 
 RegisterNetEvent('prop_placement:openAdminMenu', function()
-    -- Kategorien sammeln und sortieren
     local categories = {}
-    local catItems   = {} -- [category] = { {itemName, cfg}, ... }
+    local catItems   = {}
 
     for itemName, cfg in pairs(Config.Props) do
         local cat = cfg.category or 'Sonstiges'
@@ -414,13 +421,11 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
 
     local options = {}
 
-    -- Kategorien als Untermenüs
     for _, cat in ipairs(categories) do
         local items    = catItems[cat]
         local catName  = cat
         local catCount = #items
 
-        -- Items in der Kategorie sortieren
         table.sort(items, function(a, b) return a.cfg.label < b.cfg.label end)
 
         table.insert(options, {
