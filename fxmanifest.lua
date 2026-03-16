@@ -4,7 +4,7 @@ game 'gta5'
 name 'prop_placement'
 description 'Modulares Prop Placement System – ox_lib / ox_inventory / ox_target'
 version '1.0.0'
-author 'Custom'
+author 'D4rkst3r'
 
 shared_scripts {
     '@ox_lib/init.lua',

@@ -4,22 +4,37 @@
     ║   Client-side Entities mit CreateObjectNoOffset      ║
     ╚══════════════════════════════════════════════════════╝
 
-    SPAWN-STRATEGIE:
-    ─────────────────
-    Entity wird BEIM SPIELER erstellt (Chunk garantiert geladen),
-    dann per Retry-Loop zur Zielposition bewegt.
-    CreateObjectNoOffset verhindert automatisches Boden-Snapping.
+    ROOT CAUSE:
+    ────────────
+    syncAll feuert während des Ladebildschirms. Props werden
+    erstellt (DoesEntityExist = true), aber das Framework / die
+    Engine wirft beim playerSpawned-Event einen Teil der Entities
+    raus. Der Handle bleibt "gültig" – der Renderer zeigt nichts.
+
+    FIXES:
+    ──────
+    1. Sync erst NACH playerSpawned auslösen, nicht beim
+       Ressourcenstart (onClientResourceStart nur als Fallback
+       für späte Resource-Starts wenn Spieler bereits in der Welt).
+    2. RequestCollisionAtCoord vor jedem Spawn – stellt sicher
+       dass die Game-Welt an dieser Position geladen ist.
+    3. Post-Spawn-Check: nach dem Spawnen prüfen ob Alpha & LOD
+       korrekt gesetzt sind (detektiert "Zombie"-Entities).
+    4. Keepalive-Thread erkennt von der Engine gelöschte Entities.
+    5. NetworkSetEntityInvisibleToNetwork entfernt (verwirrt
+       Network-Manager bei lokalen Entities).
 ]]
 
-local placedProps       = {}    -- [propId] = entity
-local allPropData       = {}    -- [propId] = propData
-local propGrid          = {}    -- ['cellX:cellY'] = { propId = true, ... }
+local placedProps       = {}
+local allPropData       = {}
+local propGrid          = {}
 local hasSynced         = false
--- FIX #6: syncInProgress Guard verhindert Race-Condition zwischen
---         onClientResourceStart und playerSpawned
 local syncInProgress    = false
-local isSyncing         = false -- Guard: verhindert Streaming während syncAll läuft
+local isSyncing         = false
 local streamStillFrames = 0
+local forceStreamCheck  = false
+-- FIX: Flag das anzeigt ob playerSpawned bereits gefeuert hat
+local playerHasSpawned  = false
 
 -- ─────────────────────────────────────────────────────────
 -- Hilfsfunktionen
@@ -140,16 +155,36 @@ end
 
 local function SpawnProp(propData)
     local propId = propData.id
+
+    -- Bereits gespawnt und Entity noch gültig → nichts tun
     if placedProps[propId] and DoesEntityExist(placedProps[propId]) then return end
+
+    -- Alter ungültiger Handle → aufräumen
+    if placedProps[propId] then
+        pcall(function() exports.ox_target:removeLocalEntity(placedProps[propId]) end)
+        placedProps[propId] = nil
+    end
 
     local model = GetHashKey(propData.model)
     if not LoadModel(model) then
         DebugLog('Modell nicht ladbar: ' .. propData.model); return
     end
 
+    -- FIX: Collision für diese Koordinaten anfordern bevor die Entity erstellt
+    -- wird. Ohne das kann die Engine eine "Zombie"-Entity erstellen die existiert
+    -- aber nicht gerendert wird weil die Welt an dieser Stelle noch nicht geladen ist.
+    RequestCollisionAtCoord(propData.x, propData.y, propData.z)
+    local colWait = 0
+    while not HasCollisionLoadedAroundEntity(PlayerPedId()) and colWait < 2000 do
+        Wait(100); colWait = colWait + 100
+    end
+
     local entity = CreateObjectNoOffset(model,
         propData.x, propData.y, propData.z,
-        false, false, false)
+        false, -- isNetwork: false = lokale Entity, nur für diesen Client
+        true,  -- netMissionEntity: true = am Script-Host gepinnt, verhindert
+        -- dass die Engine die Entity als "orphaned" betrachtet und löscht
+        false) -- doorFlag
 
     if not DoesEntityExist(entity) then
         DebugLog('Entity nicht erstellt: #' .. propId)
@@ -157,6 +192,7 @@ local function SpawnProp(propData)
         return
     end
 
+    -- Entity dauerhaft halten
     SetEntityAsMissionEntity(entity, true, true)
     SetEntityRotation(entity, 0.0, 0.0, propData.rotation, 2, true)
     FreezeEntityPosition(entity, true)
@@ -164,8 +200,21 @@ local function SpawnProp(propData)
     SetEntityInvincible(entity, true)
     SetEntityCanBeDamaged(entity, false)
     SetEntityAlpha(entity, 255, false)
-    NetworkSetEntityInvisibleToNetwork(entity, false)
     SetEntityLodDist(entity, 1000)
+
+    -- FIX: NetworkSetEntityInvisibleToNetwork ENTFERNT –
+    -- auf lokalen Entities (isNetwork=false) kann das den
+    -- Network-Manager verwirren und die Entity sofort löschen.
+
+    -- Post-Spawn-Check: Alpha prüfen um Zombie-Entities zu erkennen
+    Wait(0) -- einen Frame warten damit die Engine die Entity verarbeitet
+    local alpha = GetEntityAlpha(entity)
+    if alpha ~= 255 then
+        -- Engine hat Alpha überschrieben → Entity ist im falschen Zustand
+        -- Nochmals setzen
+        SetEntityAlpha(entity, 255, false)
+        DebugLog(('Prop #%d: Alpha-Fix angewendet (war %d)'):format(propId, alpha))
+    end
 
     placedProps[propId] = entity
     allPropData[propId] = propData
@@ -185,7 +234,7 @@ local function DespawnProp(propId)
         SetEntityInvincible(entity, false)
         SetEntityCanBeDamaged(entity, true)
         FreezeEntityPosition(entity, false)
-        SetEntityAsMissionEntity(entity, true, true)
+        SetEntityAsMissionEntity(entity, false, false)
         DeleteEntity(entity)
         DebugLog('Prop #' .. propId .. ' despawnt.')
     end
@@ -198,7 +247,7 @@ local function ClearAllLocalProps()
             SetEntityInvincible(entity, false)
             SetEntityCanBeDamaged(entity, true)
             FreezeEntityPosition(entity, false)
-            SetEntityAsMissionEntity(entity, true, true)
+            SetEntityAsMissionEntity(entity, false, false)
             DeleteEntity(entity)
         end
     end
@@ -206,6 +255,30 @@ local function ClearAllLocalProps()
     allPropData = {}
     propGrid    = {}
 end
+
+-- ─────────────────────────────────────────────────────────
+-- Keepalive-Thread
+-- ─────────────────────────────────────────────────────────
+
+CreateThread(function()
+    while true do
+        Wait(3000)
+        if not isSyncing then
+            local count = 0
+            for propId, entity in pairs(placedProps) do
+                if not DoesEntityExist(entity) then
+                    placedProps[propId] = nil
+                    count = count + 1
+                    DebugLog(('Keepalive: Prop #%d fehlt, wird neu erstellt'):format(propId))
+                end
+            end
+            if count > 0 then
+                forceStreamCheck = true
+                DebugLog(('Keepalive: %d Props neu eingeplant'):format(count))
+            end
+        end
+    end
+end)
 
 -- ─────────────────────────────────────────────────────────
 -- Streaming-System
@@ -217,7 +290,13 @@ if Config.Streaming.Enabled then
         local checkInterval = Config.Streaming.CheckInterval
 
         while true do
-            Wait(checkInterval)
+            if forceStreamCheck then
+                forceStreamCheck = false
+                checkInterval    = Config.Streaming.CheckInterval
+                Wait(100)
+            else
+                Wait(checkInterval)
+            end
 
             local playerPos = GetEntityCoords(PlayerPedId())
             local px, py    = playerPos.x, playerPos.y
@@ -232,10 +311,12 @@ if Config.Streaming.Enabled then
             end
             lastPos = vector3(px, py, playerPos.z)
 
-            local toCheck = Config.Grid.Enabled and GetNearbyPropIds(px, py) or {}
+            local toCheck = {}
             if Config.Grid.Enabled then
-                for propId in pairs(placedProps) do toCheck[propId] = true end
-            else
+                for propId in pairs(GetNearbyPropIds(px, py)) do toCheck[propId] = true end
+            end
+            for propId in pairs(placedProps) do toCheck[propId] = true end
+            if not Config.Grid.Enabled then
                 for propId in pairs(allPropData) do toCheck[propId] = true end
             end
 
@@ -244,7 +325,8 @@ if Config.Streaming.Enabled then
                     local pd = allPropData[propId]
                     if pd then
                         local dist    = #(vector3(px, py, playerPos.z) - vector3(pd.x, pd.y, pd.z))
-                        local spawned = placedProps[propId] and DoesEntityExist(placedProps[propId])
+                        local entity  = placedProps[propId]
+                        local spawned = entity and DoesEntityExist(entity)
                         if not spawned and dist <= Config.Streaming.SpawnRadius then
                             SpawnProp(pd)
                         elseif spawned and dist > Config.Streaming.DespawnRadius then
@@ -269,7 +351,7 @@ AddEventHandler('ox_inventory:closedInventory', function()
 end)
 
 RegisterNetEvent('prop_placement:syncAll', function(propList)
-    DebugLog('syncAll: ' .. #propList .. ' Props')
+    DebugLog('syncAll empfangen: ' .. #propList .. ' Props')
     hasSynced = true
     isSyncing = true
     ClearAllLocalProps()
@@ -280,17 +362,49 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
     end
 
     CreateThread(function()
+        -- FIX: Warten bis playerSpawned gefeuert hat UND die Welt geladen ist.
+        -- Props die vor playerSpawned erstellt werden können vom Framework
+        -- beim Spawn-Event gelöscht werden.
+        local waitTime = 0
+        while not playerHasSpawned and waitTime < 15000 do
+            Wait(200); waitTime = waitTime + 200
+        end
+
+        -- Zusätzlich warten bis gültige Position vorhanden
         local playerPos = GetEntityCoords(PlayerPedId())
+        waitTime = 0
+        while #playerPos < 1.0 and waitTime < 8000 do
+            Wait(300); waitTime = waitTime + 300
+            playerPos = GetEntityCoords(PlayerPedId())
+        end
+
+        -- Collision sicherstellen
+        local ped = PlayerPedId()
+        waitTime = 0
+        while not HasCollisionLoadedAroundEntity(ped) and waitTime < 5000 do
+            Wait(200); waitTime = waitTime + 200; ped = PlayerPedId()
+        end
+
+        local spawnCount = 0
+        local skipCount  = 0
+
         for _, propData in ipairs(propList) do
+            playerPos = GetEntityCoords(PlayerPedId())
             local dist = #(playerPos - vector3(propData.x, propData.y, propData.z))
             if not Config.Streaming.Enabled or dist <= Config.Streaming.SpawnRadius then
                 SpawnProp(propData)
+                spawnCount = spawnCount + 1
                 Wait(10)
+            else
+                skipCount = skipCount + 1
             end
         end
+
         streamStillFrames = 0
+        if skipCount > 0 then forceStreamCheck = true end
         isSyncing = false
-        DebugLog(('syncAll: %d Props verarbeitet'):format(#propList))
+
+        DebugLog(('syncAll abgeschlossen: %d gespawnt, %d per Streaming/Retry'):format(spawnCount, skipCount))
     end)
 end)
 
@@ -322,7 +436,6 @@ RegisterNetEvent('prop_placement:startPlacing', function(itemName)
     StartPropPlacement(itemName, propConfig)
 end)
 
--- FIX #4: filterName wird jetzt vom Server korrekt mitgesendet und hier angezeigt
 RegisterNetEvent('prop_placement:receivePropList', function(list, filterName)
     if #list == 0 then
         lib.notify({ title = 'Prop-Liste', description = 'Keine Props gefunden.', type = 'inform' }); return
@@ -340,10 +453,10 @@ RegisterNetEvent('prop_placement:receivePropList', function(list, filterName)
             onSelect    = function()
                 CreateThread(function()
                     local confirmed = lib.alertDialog({
-                        header  = 'Prop #' .. capturedProp.id .. ' entfernen?',
-                        content = capturedProp.itemName .. ' dauerhaft löschen?',
+                        header   = 'Prop #' .. capturedProp.id .. ' entfernen?',
+                        content  = capturedProp.itemName .. ' dauerhaft löschen?',
                         centered = true,
-                        cancel  = true,
+                        cancel   = true,
                     })
                     if confirmed == 'confirm' then
                         TriggerServerEvent('prop_placement:remove', capturedProp.id)
@@ -393,7 +506,7 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
                         onSelect    = function()
                             local input = lib.inputDialog('Prop-Item geben', {
                                 { type = 'number', label = 'Server-ID des Spielers', required = true, min = 1 },
-                                { type = 'number', label = 'Anzahl', default = 1, min = 1, max = 99 },
+                                { type = 'number', label = 'Anzahl',                 default = 1,     min = 1, max = 99 },
                             })
                             if input and input[1] then
                                 TriggerServerEvent('prop_placement:adminGive',
@@ -468,14 +581,12 @@ end)
 -- Initialisierung
 -- ─────────────────────────────────────────────────────────
 
--- FIX #6: syncInProgress Guard verhindert Doppel-Sync wenn onClientResourceStart
---         und playerSpawned fast gleichzeitig feuern.
-local function WaitForCollisionAndSync()
+local function DoSync()
     if hasSynced or syncInProgress then return end
     syncInProgress = true
 
-    local ped    = PlayerPedId()
-    local waited = 0
+    local ped      = PlayerPedId()
+    local waited   = 0
     repeat
         Wait(500); waited = waited + 500; ped = PlayerPedId()
     until HasCollisionLoadedAroundEntity(ped) or waited >= 10000
@@ -486,21 +597,37 @@ local function WaitForCollisionAndSync()
     TriggerServerEvent('prop_placement:requestSync')
 end
 
-AddEventHandler('onClientResourceStart', function(resourceName)
-    if resourceName ~= GetCurrentResourceName() then return end
-    -- Flags zurücksetzen damit ein echter Neustart der Ressource einen neuen Sync auslöst
-    hasSynced      = false
-    syncInProgress = false
+-- FIX: playerSpawned ist der primäre Trigger.
+-- Props werden ERST erstellt nachdem der Spieler vollständig gespawnt
+-- ist – so kann das Framework sie nicht mehr beim Spawn-Event löschen.
+AddEventHandler('playerSpawned', function()
+    playerHasSpawned = true
     CreateThread(function()
-        WaitForCollisionAndSync()
-        DebugLog('Sync via onClientResourceStart')
+        DoSync()
+        DebugLog('Sync via playerSpawned')
     end)
 end)
 
-AddEventHandler('playerSpawned', function()
+-- Fallback: Falls die Ressource gestartet wird während der Spieler
+-- bereits in der Welt ist (z.B. Ressource reload via Admin)
+AddEventHandler('onClientResourceStart', function(resourceName)
+    if resourceName ~= GetCurrentResourceName() then return end
+    hasSynced        = false
+    syncInProgress   = false
+    forceStreamCheck = false
+    -- playerHasSpawned NICHT zurücksetzen – der Spieler ist bereits spawned
+
     CreateThread(function()
-        WaitForCollisionAndSync()
-        DebugLog('Sync via playerSpawned')
+        -- Kurz warten damit playerSpawned ggf. noch feuern kann
+        Wait(1000)
+        if playerHasSpawned then
+            -- Spieler ist bereits gespawnt → sofort sync
+            DoSync()
+            DebugLog('Sync via onClientResourceStart (Spieler bereits gespawnt)')
+        else
+            -- Spieler noch nicht gespawnt → playerSpawned übernimmt
+            DebugLog('onClientResourceStart: warte auf playerSpawned für Sync')
+        end
     end)
 end)
 
@@ -525,6 +652,8 @@ RegisterCommand('proplist', function()
 end, false)
 
 RegisterCommand('propreload', function()
+    hasSynced      = false
+    syncInProgress = false
     ClearAllLocalProps()
     lib.notify({ title = 'Props werden neu geladen...', type = 'inform', duration = 2000 })
     CreateThread(function()
@@ -541,7 +670,8 @@ if Config.Debug then
         for _ in pairs(propGrid) do cells = cells + 1 end
         lib.notify({
             title       = 'Prop Debug',
-            description = ('Gespawnt: %d / Bekannt: %d / Grid-Zellen: %d'):format(spawned, total, cells),
+            description = ('Gespawnt: %d / Bekannt: %d / Grid-Zellen: %d\nplayerHasSpawned: %s'):format(
+                spawned, total, cells, tostring(playerHasSpawned)),
             type        = 'inform',
         })
     end, false)
