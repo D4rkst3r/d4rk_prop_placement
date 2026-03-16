@@ -11,10 +11,11 @@
     CreateObjectNoOffset verhindert automatisches Boden-Snapping.
 ]]
 
-local placedProps       = {} -- [propId] = entity
-local allPropData       = {} -- [propId] = propData
-local propGrid          = {} -- ['cellX:cellY'] = { propId = true, ... }
+local placedProps       = {}    -- [propId] = entity
+local allPropData       = {}    -- [propId] = propData
+local propGrid          = {}    -- ['cellX:cellY'] = { propId = true, ... }
 local hasSynced         = false
+local isSyncing         = false -- Guard: verhindert Streaming während syncAll läuft
 local streamStillFrames = 0
 
 -- ─────────────────────────────────────────────────────────
@@ -143,10 +144,11 @@ local function SpawnProp(propData)
         DebugLog('Modell nicht ladbar: ' .. propData.model); return
     end
 
-    -- Entity BEIM SPIELER erstellen – Chunk dort garantiert geladen.
-    -- CreateObjectNoOffset: kein automatisches Boden-Snapping beim Erstellen.
-    local playerPos = GetEntityCoords(PlayerPedId())
-    local entity    = CreateObjectNoOffset(model, playerPos.x, playerPos.y, playerPos.z, false, false, false)
+    -- Direkt an Zielkoordinaten erstellen – Streaming stellt sicher dass
+    -- der Chunk bereits geladen ist bevor SpawnProp aufgerufen wird.
+    local entity = CreateObjectNoOffset(model,
+        propData.x, propData.y, propData.z,
+        false, false, false)
 
     if not DoesEntityExist(entity) then
         DebugLog('Entity nicht erstellt: #' .. propId)
@@ -155,6 +157,7 @@ local function SpawnProp(propData)
     end
 
     SetEntityAsMissionEntity(entity, true, true)
+    SetEntityRotation(entity, 0.0, 0.0, propData.rotation, 2, true)
     FreezeEntityPosition(entity, true)
     SetEntityCollision(entity, true, true)
     SetEntityInvincible(entity, true)
@@ -169,27 +172,8 @@ local function SpawnProp(propData)
     RegisterPropTarget(propId, entity, propData)
     SetModelAsNoLongerNeeded(model)
 
-    -- Zielposition per Retry-Loop setzen bis der Ziel-Chunk geladen ist.
-    -- GTA setzt Koordinaten auf 0 wenn der Chunk noch nicht gestreamt ist.
-    local tx, ty, tz, tr = propData.x, propData.y, propData.z, propData.rotation
-    CreateThread(function()
-        local attempts = 0
-        repeat
-            attempts = attempts + 1
-            SetEntityCoordsNoOffset(entity, tx, ty, tz, false, false, false)
-            SetEntityRotation(entity, 0.0, 0.0, tr, 2, true)
-            Wait(200)
-            if not DoesEntityExist(entity) then return end
-            local c = GetEntityCoords(entity)
-            if math.abs(c.x - tx) < 1.0 then
-                DebugLog(('Prop #%d positioniert nach %d Versuchen'):format(propId, attempts))
-                return
-            end
-        until attempts >= 30
-        DebugLog(('Prop #%d: Positionierung aufgegeben'):format(propId))
-    end)
-
-    DebugLog('Prop #' .. propId .. ' gespawnt (' .. propData.model .. ')')
+    DebugLog(('Prop #%d gespawnt bei %.1f / %.1f / %.1f'):format(
+        propId, propData.x, propData.y, propData.z))
 end
 
 local function DespawnProp(propId)
@@ -254,15 +238,18 @@ if Config.Streaming.Enabled then
                 for propId in pairs(allPropData) do toCheck[propId] = true end
             end
 
-            for propId in pairs(toCheck) do
-                local pd = allPropData[propId]
-                if pd then
-                    local dist    = #(vector3(px, py, playerPos.z) - vector3(pd.x, pd.y, pd.z))
-                    local spawned = placedProps[propId] and DoesEntityExist(placedProps[propId])
-                    if not spawned and dist <= Config.Streaming.SpawnRadius then
-                        SpawnProp(pd)
-                    elseif spawned and dist > Config.Streaming.DespawnRadius then
-                        DespawnProp(propId)
+            -- Während syncAll nichts spawnen/despawnen
+            if not isSyncing then
+                for propId in pairs(toCheck) do
+                    local pd = allPropData[propId]
+                    if pd then
+                        local dist    = #(vector3(px, py, playerPos.z) - vector3(pd.x, pd.y, pd.z))
+                        local spawned = placedProps[propId] and DoesEntityExist(placedProps[propId])
+                        if not spawned and dist <= Config.Streaming.SpawnRadius then
+                            SpawnProp(pd)
+                        elseif spawned and dist > Config.Streaming.DespawnRadius then
+                            DespawnProp(propId)
+                        end
                     end
                 end
             end
@@ -284,6 +271,7 @@ end)
 RegisterNetEvent('prop_placement:syncAll', function(propList)
     DebugLog('syncAll: ' .. #propList .. ' Props')
     hasSynced = true
+    isSyncing = true
     ClearAllLocalProps()
 
     for _, propData in ipairs(propList) do
@@ -297,10 +285,11 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
             local dist = #(playerPos - vector3(propData.x, propData.y, propData.z))
             if not Config.Streaming.Enabled or dist <= Config.Streaming.SpawnRadius then
                 SpawnProp(propData)
-                Wait(30)
+                Wait(10)
             end
         end
         streamStillFrames = 0
+        isSyncing = false
         DebugLog(('syncAll: %d Props verarbeitet'):format(#propList))
     end)
 end)

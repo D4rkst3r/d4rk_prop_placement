@@ -120,10 +120,10 @@ CreateThread(function()
             pcall(function()
                 local cfg = Config.Props[prop.itemName]
                 exports.d4rk_livemap:AddMarker({
-                    id = 'prop_' .. id,
-                    x = prop.x,
-                    y = prop.y,
-                    z = prop.z,
+                    id     = 'prop_' .. id,
+                    x      = prop.x,
+                    y      = prop.y,
+                    z      = prop.z,
                     label  = (cfg and cfg.label or prop.itemName) .. ' #' .. id,
                     color  = colorMap[(cfg and cfg.category)] or '#00d4aa',
                     icon   = 'box',
@@ -263,10 +263,10 @@ RegisterNetEvent('prop_placement:place', function(itemName, posData)
 
     pcall(function()
         exports.d4rk_livemap:AddMarker({
-            id = 'prop_' .. propId,
-            x = posData.x,
-            y = posData.y,
-            z = posData.z,
+            id     = 'prop_' .. propId,
+            x      = posData.x,
+            y      = posData.y,
+            z      = posData.z,
             label  = propConfig.label .. ' #' .. propId,
             color  = ({ Allgemein = '#60a5fa', Polizei = '#f87171', Baustelle = '#fbbf24', Admin = '#c084fc' })
                 [propConfig.category] or '#00d4aa',
@@ -323,8 +323,12 @@ RegisterNetEvent('prop_placement:adminGive', function(targetId, itemName, amount
     amount = math.max(1, math.min(amount or 1, 99))
     exports.ox_inventory:AddItem(targetId, itemName, amount)
     lib.notify(src,
-        { title = 'Item gegeben', description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId), type =
-        'success' })
+        {
+            title = 'Item gegeben',
+            description = ('%dx %s → Spieler %d'):format(amount, propConfig.label, targetId),
+            type =
+            'success'
+        })
     lib.notify(targetId,
         { title = 'Item erhalten', description = ('%dx %s erhalten.'):format(amount, propConfig.label), type = 'success' })
     LogPropAction('admin_give', src, GetIdentifier(src), GetPlayerName(src) or 'Unbekannt', nil, itemName, nil, nil,
@@ -483,5 +487,6 @@ function RemovePropFromServer(propId)
     placedProps[propId] = nil
     MySQL.query('DELETE FROM prop_placement_props WHERE id = ?', { propId })
     TriggerClientEvent('prop_placement:propRemoved', -1, propId)
+    pcall(function() exports.d4rk_livemap:RemoveMarker('prop_' .. propId) end)
     return true, prop
 end
