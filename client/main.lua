@@ -10,10 +10,6 @@ local allPropData = {}    -- [propId] = propData
 local propGrid    = {}    -- ['cellX:cellY'] = { propId, ... }
 local hasSynced   = false -- Guard gegen Doppel-Sync
 
--- ─────────────────────────────────────────────────────────
--- Hilfsfunktionen
--- ─────────────────────────────────────────────────────────
-
 local function DebugLog(msg)
     if Config.Debug then
         print('[prop_placement][CLIENT] ' .. tostring(msg))
@@ -31,10 +27,6 @@ local function LoadModel(model)
     end
     return true
 end
-
--- ─────────────────────────────────────────────────────────
--- Grid-System
--- ─────────────────────────────────────────────────────────
 
 local function GetGridCell(x, y)
     local size = Config.Grid.GridSize
@@ -76,10 +68,6 @@ local function GetNearbyPropIds(x, y)
     return nearby
 end
 
--- ─────────────────────────────────────────────────────────
--- Model-Preloading
--- ─────────────────────────────────────────────────────────
-
 if Config.Preloading.Enabled then
     CreateThread(function()
         Wait(Config.Preloading.Delay)
@@ -100,10 +88,6 @@ if Config.Preloading.Enabled then
         DebugLog(('Model-Preloading: %d Modelle vorgeladen.'):format(count))
     end)
 end
-
--- ─────────────────────────────────────────────────────────
--- ox_target registrieren
--- ─────────────────────────────────────────────────────────
 
 local function RegisterPropTarget(propId, entity, propData)
     local options = {
@@ -138,10 +122,6 @@ local function RegisterPropTarget(propId, entity, propData)
     exports.ox_target:addLocalEntity(entity, options)
 end
 
--- ─────────────────────────────────────────────────────────
--- Prop spawnen / entfernen
--- ─────────────────────────────────────────────────────────
-
 local function SpawnProp(propData)
     local propId = propData.id
     local model  = GetHashKey(propData.model)
@@ -153,7 +133,11 @@ local function SpawnProp(propData)
         return
     end
 
-    local entity = CreateObject(model, propData.x, propData.y, propData.z, false, false, false)
+    -- FIX: Entity BEIM SPIELER spawnen damit der Chunk garantiert geladen ist.
+    -- GTA setzt Koordinaten auf x=0 wenn der Ziel-Chunk noch nicht gestreamt ist.
+    -- Danach per Retry-Loop zur korrekten Position bewegen.
+    local playerPos = GetEntityCoords(PlayerPedId())
+    local entity = CreateObject(model, playerPos.x, playerPos.y, playerPos.z, false, false, false)
 
     if not DoesEntityExist(entity) then
         DebugLog('Entity konnte nicht erstellt werden: #' .. propId)
@@ -162,10 +146,7 @@ local function SpawnProp(propData)
     end
 
     SetEntityAsMissionEntity(entity, true, true)
-    -- FreezeEntityPosition(entity, false)   ← weg
-    -- PlaceObjectOnGroundProperly(entity)   ← weg
-    -- FreezeEntityPosition(entity, true)    ← weg
-    FreezeEntityPosition(entity, true) -- direkt einfrieren
+    FreezeEntityPosition(entity, true)
     SetEntityCollision(entity, true, true)
     SetEntityInvincible(entity, true)
     SetEntityCanBeDamaged(entity, false)
@@ -173,57 +154,35 @@ local function SpawnProp(propData)
     NetworkSetEntityInvisibleToNetwork(entity, false)
     SetEntityLodDist(entity, 1000)
 
-    local capturedEntity = entity
-    local capturedId     = propId
-    CreateThread(function()
-        Wait(1000)
-        DebugLog(('Prop #%d nach 1s – existiert: %s'):format(
-            capturedId, tostring(DoesEntityExist(capturedEntity))
-        ))
-    end)
-
     placedProps[propId] = entity
     allPropData[propId] = propData
     AddToGrid(propId, propData.x, propData.y)
     RegisterPropTarget(propId, entity, propData)
-    -- VISUAL DEBUG: Marker für 30s an der Prop-Position zeichnen
-    local debugX = propData.x
-    local debugY = propData.y
-    local debugZ = propData.z
-    local debugId = propId
-    CreateThread(function()
-        local timer = 0
-        while timer < 30000 do
-            DrawMarker(1,
-                debugX, debugY, debugZ + 1.0,
-                0.0, 0.0, 0.0,
-                0.0, 0.0, 0.0,
-                0.5, 0.5, 0.5,
-                255, 0, 255, 200, -- pink/magenta = leicht zu finden
-                false, false, 2, nil, nil, false
-            )
-            DrawMarker(28, -- Pfeil nach unten
-                debugX, debugY, debugZ + 3.0,
-                0.0, 0.0, 0.0,
-                0.0, 0.0, 0.0,
-                0.5, 0.5, 0.5,
-                255, 255, 0, 200, -- gelb
-                false, false, 2, nil, nil, false
-            )
-            timer = timer + 0
-            Wait(0)
-        end
-        DebugLog('Visual Debug für Prop #' .. debugId .. ' beendet')
-    end)
     SetModelAsNoLongerNeeded(model)
 
+    -- Zielposition per Retry-Loop setzen bis der Chunk geladen ist
+    local targetX   = propData.x
+    local targetY   = propData.y
+    local targetZ   = propData.z
+    local targetRot = propData.rotation
+    CreateThread(function()
+        local attempts = 0
+        repeat
+            attempts = attempts + 1
+            SetEntityCoordsNoOffset(entity, targetX, targetY, targetZ, false, false, false)
+            SetEntityRotation(entity, 0.0, 0.0, targetRot, 2, true)
+            Wait(200)
+            if not DoesEntityExist(entity) then return end
+            local coords = GetEntityCoords(entity)
+            if math.abs(coords.x - targetX) < 1.0 then
+                DebugLog(('Prop #%d korrekt positioniert nach %d Versuchen'):format(propId, attempts))
+                return
+            end
+        until attempts >= 30
+        DebugLog(('Prop #%d: Positionierung nach 30 Versuchen aufgegeben'):format(propId))
+    end)
+
     DebugLog('Prop #' .. propId .. ' gespawnt (' .. propData.model .. ')')
-    DebugLog(('Prop #%d gespawnt – existiert: %s | Alpha: %d | Pos: %.1f / %.1f / %.1f'):format(
-        propId,
-        tostring(DoesEntityExist(entity)),
-        GetEntityAlpha(entity),
-        propData.x, propData.y, propData.z
-    ))
 end
 
 local function DespawnProp(propId)
@@ -256,10 +215,6 @@ local function ClearAllLocalProps()
     allPropData = {}
     propGrid    = {}
 end
-
--- ─────────────────────────────────────────────────────────
--- Streaming-System
--- ─────────────────────────────────────────────────────────
 
 local streamStillFrames = 0
 
@@ -313,10 +268,6 @@ if Config.Streaming.Enabled then
     end)
 end
 
--- ─────────────────────────────────────────────────────────
--- Inventar geschlossen → Platzierung abbrechen
--- ─────────────────────────────────────────────────────────
-
 AddEventHandler('ox_inventory:closedInventory', function()
     if IsCurrentlyPlacing() then
         CancelPlacementExternal()
@@ -324,19 +275,15 @@ AddEventHandler('ox_inventory:closedInventory', function()
     end
 end)
 
--- ─────────────────────────────────────────────────────────
--- Net Events – Server → Client
--- ─────────────────────────────────────────────────────────
 RegisterNetEvent('prop_placement:resetSyncGuard', function()
     hasSynced = false
 end)
 
 RegisterNetEvent('prop_placement:syncAll', function(propList)
-    DebugLog('syncAll aufgerufen mit ' .. #propList .. ' Props')
+    DebugLog('syncAll: ' .. #propList .. ' Props empfangen')
     hasSynced = true
     ClearAllLocalProps()
 
-    -- Daten aufbauen
     for _, propData in ipairs(propList) do
         allPropData[propData.id] = propData
         if Config.Grid.Enabled then
@@ -344,7 +291,6 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
         end
     end
 
-    -- Direkt spawnen für Props in Reichweite
     CreateThread(function()
         local playerPos = GetEntityCoords(PlayerPedId())
         for _, propData in ipairs(propList) do
@@ -357,8 +303,6 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
         streamStillFrames = 0
         DebugLog(('syncAll abgeschlossen: %d Props verarbeitet'):format(#propList))
     end)
-
-    DebugLog(('Sync: %d Props empfangen'):format(#propList))
 end)
 
 RegisterNetEvent('prop_placement:propPlaced', function(propData)
@@ -397,10 +341,6 @@ RegisterNetEvent('prop_placement:startPlacing', function(itemName)
     end
     StartPropPlacement(itemName, propConfig)
 end)
-
--- ─────────────────────────────────────────────────────────
--- Prop-Liste empfangen (Admin)
--- ─────────────────────────────────────────────────────────
 
 RegisterNetEvent('prop_placement:receivePropList', function(list, filterName)
     if #list == 0 then
@@ -443,10 +383,6 @@ RegisterNetEvent('prop_placement:receivePropList', function(list, filterName)
     })
     lib.showContext('prop_placement_list')
 end)
-
--- ─────────────────────────────────────────────────────────
--- Admin-Menü
--- ─────────────────────────────────────────────────────────
 
 RegisterNetEvent('prop_placement:openAdminMenu', function()
     local categories = {}
@@ -573,17 +509,10 @@ RegisterNetEvent('prop_placement:openAdminMenu', function()
     lib.showContext('prop_placement_admin_menu')
 end)
 
--- ─────────────────────────────────────────────────────────
--- Initialisierung
--- ─────────────────────────────────────────────────────────
-
--- Feuert wenn die Ressource (neu) gestartet wird.
--- Spieler ist dabei bereits in der Welt → direkt synchen.
 AddEventHandler('onClientResourceStart', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
     hasSynced = false
     CreateThread(function()
-        -- Warten bis Kollision geladen ist (max 10s) – genau wie playerSpawned
         local ped    = PlayerPedId()
         local waited = 0
         repeat
@@ -601,8 +530,6 @@ AddEventHandler('onClientResourceStart', function(resourceName)
     end)
 end)
 
--- Feuert beim ersten Spawn nach Join / Respawn.
--- Wartet auf Kollision damit GTA Objekte nicht sofort wieder löscht.
 AddEventHandler('playerSpawned', function()
     CreateThread(function()
         local ped    = PlayerPedId()
@@ -632,10 +559,6 @@ AddEventHandler('onClientResourceStop', function(resourceName)
     ClearAllLocalProps()
 end)
 
--- ─────────────────────────────────────────────────────────
--- Commands
--- ─────────────────────────────────────────────────────────
-
 RegisterCommand('propadmin', function()
     TriggerServerEvent('prop_placement:requestAdminMenu')
 end, false)
@@ -647,7 +570,6 @@ end, false)
 RegisterCommand('propreload', function()
     ClearAllLocalProps()
     lib.notify({ title = 'Props werden neu geladen...', type = 'inform', duration = 2000 })
-
     CreateThread(function()
         Wait(500)
         TriggerServerEvent('prop_placement:reloadProps')
