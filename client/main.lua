@@ -162,9 +162,10 @@ local function SpawnProp(propData)
     end
 
     SetEntityAsMissionEntity(entity, true, true)
-    FreezeEntityPosition(entity, false) -- kurz auftauen damit PlaceOnGround funktioniert
-    PlaceObjectOnGroundProperly(entity) -- auf Boden snappen
-    FreezeEntityPosition(entity, true)  -- wieder einfrieren
+    -- FreezeEntityPosition(entity, false)   ← weg
+    -- PlaceObjectOnGroundProperly(entity)   ← weg
+    -- FreezeEntityPosition(entity, true)    ← weg
+    FreezeEntityPosition(entity, true) -- direkt einfrieren
     SetEntityCollision(entity, true, true)
     SetEntityInvincible(entity, true)
     SetEntityCanBeDamaged(entity, false)
@@ -335,7 +336,7 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
     hasSynced = true
     ClearAllLocalProps()
 
-    -- Nur Daten aufbauen, KEIN direktes Spawnen
+    -- Daten aufbauen
     for _, propData in ipairs(propList) do
         allPropData[propData.id] = propData
         if Config.Grid.Enabled then
@@ -343,10 +344,21 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
         end
     end
 
-    -- Streaming-Intervall zurücksetzen damit sofort geprüft wird
-    streamStillFrames = 0
+    -- Direkt spawnen für Props in Reichweite
+    CreateThread(function()
+        local playerPos = GetEntityCoords(PlayerPedId())
+        for _, propData in ipairs(propList) do
+            local dist = #(playerPos - vector3(propData.x, propData.y, propData.z))
+            if not Config.Streaming.Enabled or dist <= Config.Streaming.SpawnRadius then
+                SpawnProp(propData)
+                Wait(30)
+            end
+        end
+        streamStillFrames = 0
+        DebugLog(('syncAll abgeschlossen: %d Props verarbeitet'):format(#propList))
+    end)
 
-    DebugLog(('syncAll: %d Props in allPropData geladen – Streaming übernimmt'):format(#propList))
+    DebugLog(('Sync: %d Props empfangen'):format(#propList))
 end)
 
 RegisterNetEvent('prop_placement:propPlaced', function(propData)
