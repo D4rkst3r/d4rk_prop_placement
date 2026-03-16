@@ -212,11 +212,12 @@ end
 -- Streaming-System mit Grid + dynamischem Intervall
 -- ─────────────────────────────────────────────────────────
 
+-- Streaming-State (außerhalb Thread damit syncAll es zurücksetzen kann)
+local streamStillFrames = 0
+
 if Config.Streaming.Enabled then
     CreateThread(function()
         local lastPos       = vector3(0, 0, 0)
-        local stillFrames   = 0
-        -- OPTIMIERT: Dynamisches Intervall – steht der Spieler still, seltener prüfen
         local checkInterval = Config.Streaming.CheckInterval
 
         while true do
@@ -225,15 +226,13 @@ if Config.Streaming.Enabled then
             local playerPos = GetEntityCoords(PlayerPedId())
             local px, py    = playerPos.x, playerPos.y
 
-            -- Bewegung prüfen
             local moved     = #(vector3(px, py, playerPos.z) - lastPos)
             if moved < 2.0 then
-                stillFrames   = stillFrames + 1
-                -- Nach 5 Check-Zyklen ohne Bewegung: Intervall verdoppeln (max 10s)
-                checkInterval = math.min(10000, Config.Streaming.CheckInterval + stillFrames * 500)
+                streamStillFrames = streamStillFrames + 1
+                checkInterval     = math.min(10000, Config.Streaming.CheckInterval + streamStillFrames * 500)
             else
-                stillFrames   = 0
-                checkInterval = Config.Streaming.CheckInterval
+                streamStillFrames = 0
+                checkInterval     = Config.Streaming.CheckInterval
             end
             lastPos = vector3(px, py, playerPos.z)
 
@@ -285,7 +284,17 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
     ClearAllLocalProps()
 
     CreateThread(function()
-        local playerPos = GetEntityCoords(PlayerPedId())
+        -- FIX: Auf Kollision warten bevor Props gespawnt werden.
+        -- GTA löscht Objekte die in noch nicht gestreamten Bereichen erstellt werden.
+        local ped    = PlayerPedId()
+        local waited = 0
+        repeat
+            Wait(500)
+            waited = waited + 500
+            ped = PlayerPedId()
+        until HasCollisionLoadedAroundEntity(ped) or waited >= 8000
+
+        local playerPos = GetEntityCoords(ped)
 
         for _, propData in ipairs(propList) do
             local model    = GetHashKey(propData.model)
@@ -316,6 +325,10 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
     end)
 
     DebugLog(('Sync: %d Props empfangen'):format(#propList))
+
+    -- FIX: Streaming-Intervall zurücksetzen damit Props sofort
+    -- geprüft werden, auch wenn der Spieler still steht
+    streamStillFrames = 0
 end)
 
 RegisterNetEvent('prop_placement:propPlaced', function(propData)
@@ -541,8 +554,26 @@ AddEventHandler('onClientResourceStart', function(resourceName)
 end)
 
 AddEventHandler('playerSpawned', function()
-    Wait(500)
-    TriggerServerEvent('prop_placement:requestSync')
+    -- FIX: Nicht sofort synchen – erst warten bis die Welt
+    -- um den Spieler vollständig geladen ist (Kollision, Streaming).
+    -- Ohne diesen Wait erstellt GTA Objekte und löscht sie sofort wieder
+    -- weil die Chunks noch nicht gestreamt sind.
+    CreateThread(function()
+        local ped = PlayerPedId()
+
+        -- Warten bis Kollision geladen ist (max 10s)
+        local waited = 0
+        repeat
+            Wait(500)
+            waited = waited + 500
+            ped = PlayerPedId()
+        until HasCollisionLoadedAroundEntity(ped) or waited >= 10000
+
+        -- Nochmal 500ms extra Puffer
+        Wait(500)
+
+        TriggerServerEvent('prop_placement:requestSync')
+    end)
 end)
 
 AddEventHandler('baseevents:onPlayerDied', function()
