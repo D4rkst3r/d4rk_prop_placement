@@ -435,9 +435,6 @@ RegisterNetEvent('prop_placement:reloadProps', function()
         end
     end
 
-    -- Erst hasSynced zurücksetzen, dann syncAll schicken
-    TriggerClientEvent('prop_placement:resetSyncGuard', -1)
-    Wait(100)
     TriggerClientEvent('prop_placement:syncAll', -1, GetPropList())
 
     local count = result and #result or 0

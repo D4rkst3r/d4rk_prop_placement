@@ -178,6 +178,12 @@ local function SpawnProp(propData)
     SetModelAsNoLongerNeeded(model)
 
     DebugLog('Prop #' .. propId .. ' gespawnt (' .. propData.model .. ')')
+    DebugLog(('Prop #%d gespawnt – existiert: %s | Alpha: %d | Pos: %.1f / %.1f / %.1f'):format(
+        propId,
+        tostring(DoesEntityExist(entity)),
+        GetEntityAlpha(entity),
+        propData.x, propData.y, propData.z
+    ))
 end
 
 local function DespawnProp(propId)
@@ -286,27 +292,12 @@ RegisterNetEvent('prop_placement:resetSyncGuard', function()
 end)
 
 RegisterNetEvent('prop_placement:syncAll', function(propList)
-    -- Guard setzen damit kein zweiter Sync gleichzeitig startet
     hasSynced = true
     ClearAllLocalProps()
 
     CreateThread(function()
         local playerPos = GetEntityCoords(PlayerPedId())
 
-        -- Bestehende Welt-Duplikate an diesen Koordinaten entfernen
-        for _, propData in ipairs(propList) do
-            local model    = GetHashKey(propData.model)
-            local existing = GetClosestObjectOfType(
-                propData.x, propData.y, propData.z,
-                1.0, model, false, false, false
-            )
-            if DoesEntityExist(existing) then
-                SetEntityAsMissionEntity(existing, true, true)
-                DeleteEntity(existing)
-            end
-        end
-
-        -- allPropData und Grid aufbauen
         for _, propData in ipairs(propList) do
             allPropData[propData.id] = propData
             if Config.Grid.Enabled then
@@ -314,7 +305,6 @@ RegisterNetEvent('prop_placement:syncAll', function(propList)
             end
         end
 
-        -- Props in Reichweite spawnen
         for _, propData in ipairs(propList) do
             local dist = #(playerPos - vector3(propData.x, propData.y, propData.z))
             if not Config.Streaming.Enabled or dist <= Config.Streaming.SpawnRadius then
@@ -605,14 +595,11 @@ RegisterCommand('proplist', function()
 end, false)
 
 RegisterCommand('propreload', function()
-    -- Sofort lokal alles entfernen damit man es sieht
     ClearAllLocalProps()
     lib.notify({ title = 'Props werden neu geladen...', type = 'inform', duration = 2000 })
 
-    -- Kurze Pause damit das Verschwinden sichtbar ist
     CreateThread(function()
         Wait(500)
-        -- Dann erst Server fragen – der schickt syncAll zurück
         TriggerServerEvent('prop_placement:reloadProps')
     end)
 end, false)
